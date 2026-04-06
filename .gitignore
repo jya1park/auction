@@ -1,0 +1,27 @@
+# Claude Code internal
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+.env
+
+# Output files
+output/*.csv
+output/*.xlsx
+output/*.html
+output/~$*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
