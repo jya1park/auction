@@ -19,6 +19,8 @@ from crawler.driver import create_driver, quit_driver
 from crawler.navigator import Navigator
 from crawler.list_parser import parse_list_page, get_total_count
 from crawler.detail_parser import DetailParser
+from crawler.result_navigator import ResultNavigator
+from crawler.result_parser import parse_result_page, get_total_count as get_result_count
 from storage.exporter import save_csv, save_excel, update_excel, print_summary
 
 
@@ -114,6 +116,57 @@ def run_watchlist_mode(driver, navigator, debug):
         print(f"\n총 {len(results)}건 조회 완료")
 
     return results
+
+
+def run_result_mode(driver, args) -> list:
+    """매각결과 크롤링 모드."""
+    debug = args.debug
+    max_pages = args.pages
+
+    print(f"\n[Main] 매각결과 크롤링 시작")
+    print(f"  대상 법원: {args.court}")
+    print(f"  물건종류: {args.prop_type}")
+    print()
+
+    result_nav = ResultNavigator(driver, debug=debug)
+    search_ok = result_nav.run_search()
+
+    if not search_ok:
+        print("[Main] 매각결과 검색 실패 또는 결과 없음")
+        return []
+
+    total = get_result_count(driver.page_source)
+    if total:
+        print(f"[Main] 매각결과 전체: {total}건")
+
+    all_data = []
+    page = 1
+
+    while True:
+        print(f"\n[Main] 매각결과 페이지 {page} 파싱 중...")
+        items = parse_result_page(driver.page_source, debug=debug)
+
+        if not items:
+            print(f"[Main] 매각결과 페이지 {page}: 데이터 없음")
+            break
+
+        print(f"[Main] 매각결과 페이지 {page}: {len(items)}건")
+        all_data.extend(items)
+
+        if max_pages > 0 and page >= max_pages:
+            print(f"[Main] 최대 페이지({max_pages}) 도달")
+            break
+
+        has_next = result_nav.go_to_next_page()
+        if not has_next:
+            print("[Main] 매각결과 마지막 페이지")
+            break
+
+        page += 1
+        time.sleep(config.PAGE_DELAY)
+
+    print(f"\n[Main] 매각결과 수집 완료: {len(all_data)}건")
+    return all_data
 
 
 def run_crawl_mode(driver, navigator, args):
@@ -219,11 +272,23 @@ def main():
 
             data = run_crawl_mode(driver, navigator, args)
 
+        # 매각결과 크롤링 (경매목록과 동일한 조건)
+        result_data = []
+        try:
+            print("\n[Main] 매각결과 수집 시작...")
+            result_data = run_result_mode(driver, args)
+        except Exception as e:
+            print(f"[Main] 매각결과 수집 오류 (경매목록만 저장): {e}")
+            if args.debug:
+                import traceback
+                traceback.print_exc()
+
         # 결과 저장
-        if data:
-            print_summary(data)
-            csv_path = save_csv(data)
-            xlsx_path = update_excel(data)  # 고정 파일에 누적 업데이트 (항상 실행)
+        if data or result_data:
+            if data:
+                print_summary(data)
+                csv_path = save_csv(data)
+            xlsx_path = update_excel(data, result_data)  # 두 시트 누적 업데이트
         else:
             print("\n[Main] 수집된 데이터가 없습니다.")
 
