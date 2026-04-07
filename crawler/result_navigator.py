@@ -99,31 +99,65 @@ class ResultNavigator:
             self.log(f"  JS select 오류: {e}")
             return False
 
+    def _js_select_any(self, target_text: str) -> bool:
+        """
+        페이지의 모든 select 요소를 순회하며 대상 텍스트를 가진 옵션을 선택합니다.
+        특정 ID를 몰라도 동작하는 범용 fallback.
+        """
+        codes = [str(ord(c)) for c in target_text]
+        js = f"""
+        var codes = [{','.join(codes)}];
+        var target = String.fromCharCode.apply(null, codes);
+        var sels = document.querySelectorAll('select');
+        for(var j=0; j<sels.length; j++){{
+            var sel = sels[j];
+            for(var i=0; i<sel.options.length; i++){{
+                if(sel.options[i].text.indexOf(target)>=0){{
+                    sel.selectedIndex = i;
+                    sel.dispatchEvent(new Event('change',{{bubbles:true}}));
+                    return 'ok:id=' + sel.id + ',text=' + sel.options[i].text;
+                }}
+            }}
+        }}
+        return 'not-found';
+        """
+        try:
+            r = self.driver.execute_script(js)
+            self.log(f"  범용 select ({target_text}): {r}")
+            return r and r.startswith("ok:")
+        except Exception as e:
+            self.log(f"  범용 select 오류: {e}")
+            return False
+
+    def save_debug_source(self, filename: str = "result_debug.html"):
+        """디버그용 페이지 소스 저장."""
+        import os
+        try:
+            path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output", filename)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.driver.page_source)
+            self.log(f"페이지 소스 저장: {path}")
+        except Exception as e:
+            self.log(f"소스 저장 실패: {e}")
+
     def select_court(self, court_name: str = None) -> bool:
-        """법원 선택."""
+        """법원 선택 - 알려진 ID → 범용 자동탐색 순으로 시도."""
         court_name = court_name or config.TARGET_COURT
-        # 매각결과 페이지의 법원 select ID (물건검색과 동일한 패턴)
-        court_ids = [
+        known_ids = [
             "mf_wfm_mainFrame_sbx_rletCortOfc",
             "mf_wfm_mainFrame_sbx_cortOfc",
+            "mf_wfm_mainFrame_sbx_jiwonNm",
             "idJiwonNm", "jiwonNm",
         ]
-        for cid in court_ids:
+        for cid in known_ids:
             if self._js_select(cid, court_name):
                 time.sleep(1)
                 return True
-        # 자동 탐색: 옵션에 법원명 포함된 select 찾기
-        for sel in self.driver.find_elements(By.TAG_NAME, "select"):
-            try:
-                s = Select(sel)
-                for opt in s.options:
-                    if court_name in opt.text:
-                        s.select_by_visible_text(opt.text)
-                        self.log(f"법원 자동 선택: {opt.text}")
-                        time.sleep(1)
-                        return True
-            except Exception:
-                continue
+        # 범용 자동탐색 (페이지의 모든 select 순회)
+        if self._js_select_any(court_name):
+            time.sleep(1)
+            return True
         self.log("법원 선택 실패")
         return False
 
@@ -139,7 +173,7 @@ class ResultNavigator:
         }
         large, mid, small = CATEGORY_MAP.get(prop_type, ("건물", "주거용건물", prop_type))
 
-        # 매각결과 페이지의 드롭다운 ID 후보
+        # 알려진 ID 후보 + 범용 자동탐색 혼합
         lcl_ids = ["mf_wfm_mainFrame_sbx_rletLclLst", "mf_wfm_mainFrame_sbx_lclLst", "mulGbnCd"]
         mcl_ids = ["mf_wfm_mainFrame_sbx_rletMclLst", "mf_wfm_mainFrame_sbx_mclLst", "mulKindCd"]
         scl_ids = ["mf_wfm_mainFrame_sbx_rletSclLst", "mf_wfm_mainFrame_sbx_sclLst"]
@@ -148,7 +182,8 @@ class ResultNavigator:
             for eid in id_list:
                 if self._js_select(eid, text):
                     return True
-            return False
+            # 범용 자동탐색 fallback
+            return self._js_select_any(text)
 
         ok1 = try_select(lcl_ids, large)
         if ok1:
@@ -241,10 +276,23 @@ class ResultNavigator:
         self.go_to_result_page()
         self.switch_to_iframe()
         time.sleep(2)
+
+        # 현재 페이지에 select 요소가 있는지 확인
+        selects = self.driver.find_elements(By.TAG_NAME, "select")
+        self.log(f"페이지 select 수: {len(selects)}")
+        if self.debug:
+            for s in selects:
+                self.log(f"  select id={s.get_attribute('id')}")
+
         self.select_court()
         self.select_property_type()
         search_ok = self.click_search_button()
         if not search_ok:
+            self.log("검색 버튼 클릭 실패 - 디버그 소스 저장")
+            self.save_debug_source("result_debug_no_button.html")
             return False
         time.sleep(config.PAGE_DELAY)
-        return self.wait_for_results()
+        found = self.wait_for_results()
+        if not found:
+            self.save_debug_source("result_debug_no_data.html")
+        return found
