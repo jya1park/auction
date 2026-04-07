@@ -66,38 +66,159 @@ def parse_args():
     return parser.parse_args()
 
 
+def _parse_case_number(raw: str):
+    """
+    '2023타경10883' 형식의 사건번호를 (연도, 사건구분, 번호)로 분리합니다.
+    예: '2023타경10883' → ('2023', '타경', '10883')
+    """
+    import re
+    m = re.match(r'(\d{4})(타경|타채|강경|강채|타기|경매|임의|강제)(\d+)', raw.strip())
+    if m:
+        return m.group(1), m.group(2), m.group(3)
+    # 숫자만 있는 경우 (연도+번호만)
+    m2 = re.match(r'(\d{4})(\d+)', raw.strip())
+    if m2:
+        return m2.group(1), '타경', m2.group(2)
+    return None, None, raw.strip()
+
+
+def _input_case_number(driver, year: str, case_type: str, number: str, debug: bool = False):
+    """
+    사건번호 검색 필드에 연도/사건구분/번호를 각각 입력합니다.
+    대법원 경매 사이트는 연도 + 사건구분(드롭다운) + 번호 3개 필드 구조입니다.
+    """
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import Select
+
+    def log(msg):
+        if debug:
+            print(f"  [CaseInput] {msg}")
+
+    # ── 연도 입력 ──
+    year_ids = [
+        "mf_wfm_mainFrame_ipt_jiwonYear",
+        "mf_wfm_mainFrame_ipt_caseYear",
+        "caseYear", "jiwonYear", "searchYear",
+    ]
+    year_xpath = "//input[contains(@id,'Year') or contains(@id,'year')][@maxlength='4' or @size='4']"
+    year_input = None
+    for yid in year_ids:
+        try:
+            el = driver.find_element(By.ID, yid)
+            year_input = el
+            break
+        except Exception:
+            pass
+    if not year_input:
+        try:
+            els = driver.find_elements(By.XPATH, year_xpath)
+            if els:
+                year_input = els[0]
+        except Exception:
+            pass
+    if year_input:
+        try:
+            year_input.clear()
+            year_input.send_keys(year)
+            log(f"연도 입력: {year}")
+        except Exception as e:
+            log(f"연도 입력 오류: {e}")
+    else:
+        log("연도 입력 필드 없음")
+
+    # ── 사건구분 드롭다운 ──
+    type_ids = [
+        "mf_wfm_mainFrame_sbx_caseGbn",
+        "mf_wfm_mainFrame_sbx_jiwonGbn",
+        "caseGbn", "jiwonGbn", "caseType",
+    ]
+    codes = [str(ord(c)) for c in case_type]
+    js_select = f"""
+    var ids = {type_ids};
+    var codes = [{','.join(codes)}];
+    var target = String.fromCharCode.apply(null, codes);
+    for(var j=0; j<ids.length; j++){{
+        var sel = document.getElementById(ids[j]);
+        if(!sel) continue;
+        for(var i=0; i<sel.options.length; i++){{
+            if(sel.options[i].text.indexOf(target)>=0 || sel.options[i].value.indexOf(target)>=0){{
+                sel.selectedIndex = i;
+                sel.dispatchEvent(new Event('change',{{bubbles:true}}));
+                return 'ok:' + sel.options[i].text;
+            }}
+        }}
+    }}
+    return 'not-found';
+    """
+    try:
+        r = driver.execute_script(js_select)
+        log(f"사건구분 선택: {r}")
+    except Exception as e:
+        log(f"사건구분 오류: {e}")
+
+    # ── 번호 입력 ──
+    num_ids = [
+        "mf_wfm_mainFrame_ipt_jiwonNo",
+        "mf_wfm_mainFrame_ipt_caseNo",
+        "caseNo", "jiwonNo", "searchNo",
+    ]
+    num_xpath = "//input[contains(@id,'No') or contains(@id,'no') or contains(@id,'Num') or contains(@id,'num')][@type='text']"
+    num_input = None
+    for nid in num_ids:
+        try:
+            el = driver.find_element(By.ID, nid)
+            num_input = el
+            break
+        except Exception:
+            pass
+    if not num_input:
+        try:
+            els = driver.find_elements(By.XPATH, num_xpath)
+            # 연도 필드가 아닌 것 중 첫 번째
+            for el in els:
+                maxlen = el.get_attribute("maxlength") or ""
+                if maxlen != "4":
+                    num_input = el
+                    break
+        except Exception:
+            pass
+    if num_input:
+        try:
+            num_input.clear()
+            num_input.send_keys(number)
+            log(f"번호 입력: {number}")
+        except Exception as e:
+            log(f"번호 입력 오류: {e}")
+    else:
+        log("번호 입력 필드 없음")
+
+
 def run_watchlist_mode(driver, navigator, debug):
     """찜한 물건 낙찰 조회 모드."""
     print("\n" + "="*60)
     print("찜한 물건 낙찰 조회 모드")
-    print("사건번호를 입력하세요 (빈 줄 입력 시 종료)")
+    print("사건번호를 입력하세요 (예: 2023타경10883, 빈 줄 입력 시 종료)")
     print("="*60)
 
     detail_parser = DetailParser(driver, debug=debug)
     results = []
 
     while True:
-        case_num = input("사건번호: ").strip()
-        if not case_num:
+        raw_input = input("사건번호: ").strip()
+        if not raw_input:
             break
 
-        print(f"  조회 중: {case_num}")
-        # 검색 페이지로 이동 후 사건번호로 검색
+        year, case_type, number = _parse_case_number(raw_input)
+        print(f"  조회 중: {raw_input}  (연도={year}, 구분={case_type}, 번호={number})")
+
+        # 검색 페이지로 이동
         navigator.go_to_search_page()
         navigator.switch_to_main_iframe()
+        time.sleep(1)
 
-        # 사건번호 입력 필드 탐색
-        try:
-            from selenium.webdriver.common.by import By
-            case_inputs = driver.find_elements(By.XPATH,
-                "//input[contains(@id,'case') or contains(@id,'Case') or contains(@placeholder,'사건번호')]"
-            )
-            if case_inputs:
-                case_inputs[0].clear()
-                case_inputs[0].send_keys(case_num)
-        except Exception as e:
-            if debug:
-                print(f"  사건번호 입력 오류: {e}")
+        # 연도/사건구분/번호 각각 입력
+        _input_case_number(driver, year, case_type, number, debug=debug)
+        time.sleep(0.5)
 
         navigator.click_search_button()
         time.sleep(2)
@@ -109,7 +230,7 @@ def run_watchlist_mode(driver, navigator, debug):
             results.append(item)
             print(f"  결과: 낙찰가={item.get('낙찰가', '정보없음')}, 상태={item.get('진행상태', '정보없음')}")
         else:
-            print(f"  결과: 사건번호 {case_num} 조회 결과 없음")
+            print(f"  결과: 사건번호 {raw_input} 조회 결과 없음")
 
     if results:
         save_csv(results)
