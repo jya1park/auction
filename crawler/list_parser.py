@@ -258,4 +258,7 @@ def get_total_count(page_source: str) -> Optional[int]:
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
-            val = int(match.group(1).replace(","
+            val = int(match.group(1).replace(",", ""))
+            if val > 0:
+                return val
+    return None
