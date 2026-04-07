@@ -1,5 +1,6 @@
 BASE_URL = "https://www.courtauction.go.kr/"
 SEARCH_URL = "https://www.courtauction.go.kr/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ151F00.xml"
+RESULT_URL = "https://www.courtauction.go.kr/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ161F00.xml"
 
 TARGET_COURT = "수원지방법원"
 TARGET_TYPE = "아파트"
