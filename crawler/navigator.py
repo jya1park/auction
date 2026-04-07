@@ -336,20 +336,21 @@ class Navigator:
         prop_type = prop_type or config.TARGET_TYPE
         self.log(f"물건종류 선택: {prop_type}")
 
-        # 아파트 = 건물 > 아파트 구조
-        # 대분류 매핑
-        LARGE_CATEGORY_MAP = {
-            "아파트": "건물",
-            "다세대": "건물",
-            "오피스텔": "건물",
-            "상가": "건물",
-            "토지": "토지",
-            "임야": "토지",
+        # 대분류 → 중분류 → 소분류 3단계 매핑
+        # (대분류, 중분류, 소분류) - 소분류 없으면 None
+        CATEGORY_MAP = {
+            "아파트":    ("건물", "주거용건물", "아파트"),
+            "다세대":    ("건물", "주거용건물", "다세대주택"),
+            "오피스텔":  ("건물", "주거용건물", "오피스텔"),
+            "상가":      ("건물", "상업용건물", None),
+            "토지":      ("토지", None, None),
+            "임야":      ("토지", None, None),
         }
-        large_cat = LARGE_CATEGORY_MAP.get(prop_type, "건물")
+        large_cat, mid_cat, small_cat = CATEGORY_MAP.get(prop_type, ("건물", "주거용건물", prop_type))
 
         lcl_id = "mf_wfm_mainFrame_sbx_rletLclLst"
         mcl_id = "mf_wfm_mainFrame_sbx_rletMclLst"
+        scl_id = "mf_wfm_mainFrame_sbx_rletSclLst"
 
         def js_select_by_text(elem_id: str, target_text: str) -> bool:
             """JS로 select에서 텍스트 기반 옵션 선택 (인코딩 안전)."""
@@ -386,13 +387,31 @@ class Navigator:
 
         # 2단계: 중분류 선택 - 재시도 포함
         ok2 = False
-        for attempt in range(3):
-            ok2 = js_select_by_text(mcl_id, prop_type)
+        if mid_cat:
+            for attempt in range(3):
+                ok2 = js_select_by_text(mcl_id, mid_cat)
+                if ok2:
+                    break
+                self.log(f"  중분류 선택 재시도 {attempt+1}/3")
+                time.sleep(1.5)
             if ok2:
-                break
-            self.log(f"  중분류 선택 재시도 {attempt+1}/3")
-            time.sleep(1.5)
-        if ok2:
+                time.sleep(3)  # 소분류 AJAX 로드 대기
+
+        # 3단계: 소분류 선택 - 재시도 포함
+        ok3 = False
+        if small_cat:
+            for attempt in range(3):
+                ok3 = js_select_by_text(scl_id, small_cat)
+                if ok3:
+                    break
+                self.log(f"  소분류 선택 재시도 {attempt+1}/3")
+                time.sleep(1.5)
+            if ok3:
+                time.sleep(1)
+                return True
+
+        # 소분류 없는 경우 중분류까지만 선택해도 성공
+        if ok2 and not small_cat:
             time.sleep(1)
             return True
 
@@ -405,7 +424,7 @@ class Navigator:
 
         # 대분류만 선택된 경우도 부분 성공으로 처리
         if ok1:
-            self.log(f"  대분류만 선택됨 (중분류 실패)")
+            self.log(f"  대분류만 선택됨 (중/소분류 실패)")
             return True
 
         self.log(f"경고: 물건종류 선택 실패")
