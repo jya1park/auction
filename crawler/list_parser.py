@@ -165,7 +165,7 @@ def parse_list_page(page_source: str, debug: bool = False) -> List[Dict]:
     테이블은 메인 행(8셀) + 상세 행(3셀) 쌍으로 구성됩니다.
     동일 사건번호의 복수 물건은 빈 셀 행으로 이어집니다.
     """
-    soup = BeautifulSoup(page_source, "lxml")
+    soup = BeautifulSoup(page_source, "html.parser")
     results = []
 
     # 데이터 테이블 선택 (데이터 행이 가장 많은 테이블)
@@ -247,7 +247,7 @@ def parse_list_page(page_source: str, debug: bool = False) -> List[Dict]:
 
 def get_total_count(page_source: str) -> Optional[int]:
     """페이지에서 전체 결과 수를 추출합니다."""
-    soup = BeautifulSoup(page_source, "lxml")
+    soup = BeautifulSoup(page_source, "html.parser")
     patterns = [
         r"총\s*([\d,]+)\s*건",
         r"전체\s*([\d,]+)\s*건",
@@ -258,7 +258,4 @@ def get_total_count(page_source: str) -> Optional[int]:
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
-            val = int(match.group(1).replace(",", ""))
-            if val > 0:
-                return val
-    return None
+            val = int(match.group(1).replace(","
