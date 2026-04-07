@@ -19,7 +19,7 @@ from crawler.driver import create_driver, quit_driver
 from crawler.navigator import Navigator
 from crawler.list_parser import parse_list_page, get_total_count
 from crawler.detail_parser import DetailParser
-from storage.exporter import save_csv, save_excel, print_summary
+from storage.exporter import save_csv, save_excel, update_excel, print_summary
 
 
 def parse_args():
@@ -223,8 +223,7 @@ def main():
         if data:
             print_summary(data)
             csv_path = save_csv(data)
-            if args.excel:
-                xlsx_path = save_excel(data)
+            xlsx_path = update_excel(data)  # 고정 파일에 누적 업데이트 (항상 실행)
         else:
             print("\n[Main] 수집된 데이터가 없습니다.")
 
