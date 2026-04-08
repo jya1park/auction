@@ -1,26 +1,24 @@
 """
-경매 데이터 지도 시각화 모듈
+경매 데이터 지도 시각화 모듈 (카카오맵)
 
-output/ 디렉토리의 최신 xlsx 파일을 읽어
-각 물건의 위치를 Leaflet.js 지도에 마커로 표시하는 HTML 파일을 생성합니다.
+output/ 디렉토리의 최신 xlsx 파일을 읽어 데이터를 JSON으로 삽입한
+단일 HTML 파일을 생성합니다. Geocoding은 브라우저에서 카카오맵 JS SDK로 처리합니다.
 """
 import os
-import re
 import json
-import time
 import glob
-import urllib.request
-import urllib.parse
 from typing import List, Dict, Optional, Tuple
 
 import config
 
 
+KAKAO_APP_KEY = "614ddc420a052c47f1b0a7eb2169d862"
+
 # 주소 컬럼 후보 (우선순위 순)
 ADDRESS_COLUMNS = ["물건주소", "소재지", "주소", "물건소재지"]
 
-# 팝업에 표시할 컬럼 후보 (있는 것만 표시)
-POPUP_COLUMNS = [
+# HTML에 포함할 데이터 컬럼 후보 (있는 것만)
+DATA_COLUMNS = [
     "사건번호", "법원", "물건번호",
     "물건주소", "소재지", "주소", "물건소재지",
     "용도", "감정평가액", "감정가",
@@ -29,14 +27,10 @@ POPUP_COLUMNS = [
     "유찰횟수", "입찰방법",
 ]
 
-NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-USER_AGENT = "courtauction-map/1.0"
-GEOCODE_DELAY = 1.0  # 초 (rate limit 준수)
-
 # 기본 중심 좌표 (수원시)
 DEFAULT_LAT = 37.2636
 DEFAULT_LNG = 127.0286
-DEFAULT_ZOOM = 12
+DEFAULT_LEVEL = 7
 
 # 샘플 데이터 (use_sample=True 시 사용)
 SAMPLE_DATA = [
@@ -100,7 +94,6 @@ def _get_output_dir() -> str:
 def _find_latest_xlsx() -> str:
     """output/ 디렉토리에서 가장 최근 xlsx 파일을 반환합니다 (임시파일 제외)."""
     out_dir = _get_output_dir()
-    # ~$ 로 시작하는 임시 파일 제외
     candidates = [
         f for f in glob.glob(os.path.join(out_dir, "*.xlsx"))
         if not os.path.basename(f).startswith("~$")
@@ -118,8 +111,6 @@ def _read_excel(xlsx_path: str) -> Tuple[List[str], List[Dict]]:
         raise ImportError("openpyxl이 설치되지 않았습니다. pip install openpyxl")
 
     wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
-
-    # "경매목록" 시트 우선, 없으면 첫 번째 시트
     if "경매목록" in wb.sheetnames:
         ws = wb["경매목록"]
     else:
@@ -143,133 +134,36 @@ def _read_excel(xlsx_path: str) -> Tuple[List[str], List[Dict]]:
 
 
 def _find_address_column(headers: List[str]) -> Optional[str]:
-    """주소 컬럼명을 우선순위에 따라 탐색합니다."""
     for candidate in ADDRESS_COLUMNS:
         if candidate in headers:
             return candidate
-    # 부분 매칭 fallback
     for h in headers:
         if "소재" in h or "주소" in h:
             return h
     return None
 
 
-def _clean_address(address: str) -> str:
-    """
-    geocoding용 주소 정제:
-    - '[...]' 이후 건물 상세 설명 제거
-    - '(' 이후 건물명 제거
-    - 동/호수 등 세부 번지 제거 후 도로명+번지까지만 남김
-    """
-    addr = str(address).strip()
-
-    # '[' 이후 제거 (건물 구조/면적 설명)
-    addr = addr.split("[")[0].strip()
-
-    # '(' 이후 제거 (건물명 등)
-    addr = addr.split("(")[0].strip()
-
-    # 개행 이후 제거
-    addr = addr.split("\n")[0].strip()
-
-    return addr
-
-
-def _shorten_address(address: str) -> List[str]:
-    """
-    주소를 단계적으로 줄인 후보 목록을 반환합니다.
-    예) "경기도 수원시 팔달구 효원로 1 3층310호"
-      → ["경기도 수원시 팔달구 효원로 1", "경기도 수원시 팔달구 효원로", "경기도 수원시 팔달구"]
-    """
-    parts = address.split()
-    candidates = []
-
-    # 숫자+층/호/동 패턴 이전까지 잘라내기
-    clean_end = len(parts)
-    for i, p in enumerate(parts):
-        if re.search(r'\d+[층호동]$', p) and i >= 4:
-            clean_end = i
-            break
-
-    if clean_end < len(parts):
-        candidates.append(" ".join(parts[:clean_end]))
-
-    # 원본 전체
-    candidates.append(address)
-
-    # 뒤에서 한 토큰씩 제거 (최소 3토큰 유지)
-    for n in range(len(parts) - 1, 2, -1):
-        shortened = " ".join(parts[:n])
-        if shortened not in candidates:
-            candidates.append(shortened)
-
-    return candidates
-
-
-def _geocode(address: str) -> Optional[Tuple[float, float]]:
-    """
-    Nominatim API로 주소를 좌표로 변환합니다.
-    1. 정제된 전체 주소로 시도
-    2. 실패 시 단계적으로 주소를 줄여 재시도
-    실패 시 None 반환.
-    """
-    if not address or not str(address).strip():
-        return None
-
-    cleaned = _clean_address(address)
-    candidates = _shorten_address(cleaned)
-
-    for attempt, query in enumerate(candidates):
-        if not query.strip():
+def _build_items_json(data: List[Dict], headers: List[str], addr_col: str) -> str:
+    """HTML에 인라인으로 삽입할 JS 배열 문자열을 반환합니다."""
+    items = []
+    for record in data:
+        address = str(record.get(addr_col, "") or "").strip()
+        if not address or address == "None":
             continue
-        params = urllib.parse.urlencode({
-            "q": query,
-            "format": "json",
-            "limit": 1,
-            "countrycodes": "kr",
-        })
-        url = f"{NOMINATIM_URL}?{params}"
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                results = json.loads(resp.read().decode("utf-8"))
-            if results:
-                if attempt > 0:
-                    print(f"      → 재시도 성공 (단계 {attempt}): '{query}'")
-                return float(results[0]["lat"]), float(results[0]["lon"])
-        except Exception as e:
-            print(f"    [MapGen] geocoding 오류 ('{query[:30]}'): {e}")
 
-        # 재시도 전 딜레이
-        if attempt < len(candidates) - 1:
-            time.sleep(GEOCODE_DELAY)
+        item: Dict = {"addr": address}
+        for col in DATA_COLUMNS:
+            if col in headers and record.get(col) is not None:
+                val = str(record[col]).strip()
+                if val and val != "None":
+                    item[col] = val
 
-    return None
+        items.append(item)
+
+    return json.dumps(items, ensure_ascii=False)
 
 
-def _build_popup_fields(record: Dict, headers: List[str]) -> Dict[str, str]:
-    """팝업에 표시할 필드만 추출합니다."""
-    fields = {}
-    for col in POPUP_COLUMNS:
-        if col in headers and record.get(col) is not None:
-            val = str(record[col]).strip()
-            if val and val != "None":
-                fields[col] = val
-    return fields
-
-
-def _format_popup_html(fields: Dict[str, str]) -> str:
-    rows_html = "".join(
-        f"<tr><th>{k}</th><td>{v}</td></tr>"
-        for k, v in fields.items()
-    )
-    return f"<table class='popup-table'>{rows_html}</table>"
-
-
-def _build_html(markers: List[Dict], title_suffix: str = "") -> str:
-    """마커 데이터를 포함한 단일 HTML 파일 문자열을 반환합니다."""
-    markers_json = json.dumps(markers, ensure_ascii=False, indent=2)
-    total = len(markers)
+def _build_html(items_json: str, total: int, title_suffix: str = "") -> str:
     title = f"경매 물건 지도{title_suffix}"
 
     return f"""<!DOCTYPE html>
@@ -278,105 +172,181 @@ def _build_html(markers: List[Dict], title_suffix: str = "") -> str:
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{title}</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <style>
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{ font-family: 'Malgun Gothic', sans-serif; }}
     #map {{ width: 100%; height: 100vh; }}
-    .info-box {{
+    #panel {{
       position: absolute;
       top: 10px;
-      right: 10px;
-      z-index: 1000;
-      background: rgba(255,255,255,0.92);
-      padding: 10px 16px;
+      left: 10px;
+      z-index: 2;
+      background: rgba(255,255,255,0.93);
+      padding: 8px 14px;
       border-radius: 6px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-      font-size: 14px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.22);
+      font-size: 13px;
       font-weight: bold;
       color: #1F4E79;
-      pointer-events: none;
     }}
-    .popup-table {{ border-collapse: collapse; font-size: 13px; min-width: 220px; }}
-    .popup-table th {{
+    .iw-wrap {{
+      padding: 10px 30px 10px 12px;
+      font-family: 'Malgun Gothic', sans-serif;
+      font-size: 13px;
+      min-width: 200px;
+      max-width: 300px;
+      position: relative;
+    }}
+    .iw-close {{
+      position: absolute;
+      top: 6px;
+      right: 8px;
+      background: none;
+      border: none;
+      font-size: 15px;
+      cursor: pointer;
+      color: #888;
+      line-height: 1;
+      padding: 2px;
+    }}
+    .iw-close:hover {{ color: #333; }}
+    .iw-table {{ border-collapse: collapse; width: 100%; margin-top: 4px; }}
+    .iw-table th {{
       text-align: left;
-      padding: 3px 10px 3px 0;
-      color: #555;
+      padding: 2px 10px 2px 0;
+      color: #666;
       white-space: nowrap;
       vertical-align: top;
+      font-weight: normal;
     }}
-    .popup-table td {{
-      padding: 3px 4px;
+    .iw-table td {{
+      padding: 2px 0;
       color: #222;
-      max-width: 240px;
       word-break: break-all;
     }}
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div class="info-box">총 {total}건</div>
+  <div id="panel">
+    총 {total}건 | 지도 표시: <span id="mapped-count">0</span>건
+  </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script type="text/javascript"
+    src="//dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_APP_KEY}&libraries=services,clusterer">
+  </script>
   <script>
-    const markers = {markers_json};
+    var ITEMS = {items_json};
 
-    const map = L.map('map').setView([{DEFAULT_LAT}, {DEFAULT_LNG}], {DEFAULT_ZOOM});
-
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      maxZoom: 19
-    }}).addTo(map);
-
-    const cluster = L.markerClusterGroup();
-
-    markers.forEach(function(item) {{
-      const marker = L.marker([item.lat, item.lng]);
-      marker.bindPopup(item.popup, {{ maxWidth: 320 }});
-      cluster.addLayer(marker);
+    var mapContainer = document.getElementById('map');
+    var map = new kakao.maps.Map(mapContainer, {{
+      center: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LNG}),
+      level: {DEFAULT_LEVEL}
     }});
 
-    map.addLayer(cluster);
+    map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
+    map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
 
-    if (markers.length > 0) {{
-      const group = L.featureGroup(
-        markers.map(function(m) {{ return L.marker([m.lat, m.lng]); }})
-      );
-      map.fitBounds(group.getBounds().pad(0.15));
+    var geocoder  = new kakao.maps.services.Geocoder();
+    var clusterer = new kakao.maps.MarkerClusterer({{
+      map: map,
+      averageCenter: true,
+      minLevel: 4
+    }});
+
+    var currentIW = null;
+    var mappedCount = 0;
+    var bounds = new kakao.maps.LatLngBounds();
+    var markerList = [];
+
+    // InfoWindow 닫기 (전역 함수 - 인라인 onclick에서 호출)
+    window.closeIW = function() {{
+      if (currentIW) {{ currentIW.close(); currentIW = null; }}
+    }};
+
+    function buildContent(item) {{
+      var LABELS = {{
+        '사건번호':      '사건번호',
+        '법원':          '법원',
+        '물건번호':      '물건번호',
+        '물건주소':      '주소',
+        '소재지':        '주소',
+        '주소':          '주소',
+        '물건소재지':    '주소',
+        '용도':          '용도',
+        '감정평가액':    '감정가',
+        '감정가':        '감정가',
+        '최저입찰가_표시': '최저매각가',
+        '최저입찰가':    '최저매각가',
+        '최저매각가':    '최저매각가',
+        '입찰기일':      '매각기일',
+        '매각기일':      '매각기일',
+        '진행상태':      '상태',
+        '상태':          '상태',
+        '유찰횟수':      '유찰횟수',
+      }};
+      // 중복 레이블 제거
+      var seen = {{}};
+      var rows = '';
+      Object.keys(LABELS).forEach(function(key) {{
+        var label = LABELS[key];
+        if (item[key] && !seen[label]) {{
+          seen[label] = true;
+          rows += '<tr><th>' + label + '</th><td>' + item[key] + '</td></tr>';
+        }}
+      }});
+      return '<div class="iw-wrap">'
+           + '<button class="iw-close" onclick="closeIW()">✕</button>'
+           + '<table class="iw-table">' + rows + '</table>'
+           + '</div>';
     }}
+
+    function addMarker(item, lat, lng) {{
+      var pos    = new kakao.maps.LatLng(lat, lng);
+      var marker = new kakao.maps.Marker({{ position: pos }});
+      var iw     = new kakao.maps.InfoWindow({{
+        content: buildContent(item),
+        removable: false
+      }});
+
+      kakao.maps.event.addListener(marker, 'click', function() {{
+        closeIW();
+        iw.open(map, marker);
+        currentIW = iw;
+      }});
+
+      markerList.push(marker);
+      bounds.extend(pos);
+      mappedCount++;
+      document.getElementById('mapped-count').textContent = mappedCount;
+    }}
+
+    // 순차 geocoding (카카오 API 부하 분산)
+    var idx = 0;
+    function processNext() {{
+      if (idx >= ITEMS.length) {{
+        // 모두 완료 후 bounds 조정
+        clusterer.addMarkers(markerList);
+        if (markerList.length > 0) {{
+          map.setBounds(bounds);
+        }}
+        return;
+      }}
+      var item = ITEMS[idx++];
+      geocoder.addressSearch(item.addr, function(result, status) {{
+        if (status === kakao.maps.services.Status.OK) {{
+          addMarker(item, result[0].y, result[0].x);
+        }}
+        // 다음 아이템 처리 (50ms 간격으로 부하 분산)
+        setTimeout(processNext, 50);
+      }});
+    }}
+
+    processNext();
   </script>
 </body>
 </html>
 """
-
-
-def _geocode_records(
-    data: List[Dict],
-    addr_col: str,
-    headers: List[str],
-) -> List[Dict]:
-    """데이터 목록을 geocoding하여 마커 목록을 반환합니다."""
-    markers = []
-    total = len(data)
-    for i, record in enumerate(data):
-        address = record.get(addr_col, "")
-        coords = _geocode(address)
-        if coords is None:
-            print(f"  [{i+1}/{total}] 스킵 (geocoding 실패): {str(address)[:50]}")
-        else:
-            lat, lng = coords
-            fields = _build_popup_fields(record, headers)
-            popup_html = _format_popup_html(fields)
-            markers.append({"lat": lat, "lng": lng, "popup": popup_html})
-            print(f"  [{i+1}/{total}] OK ({lat:.4f}, {lng:.4f}): {str(address)[:50]}")
-
-        if i < total - 1:
-            time.sleep(GEOCODE_DELAY)
-
-    return markers
 
 
 def generate_map(
@@ -385,7 +355,8 @@ def generate_map(
     use_sample: bool = False,
 ) -> str:
     """
-    엑셀 파일을 읽어 지도 HTML을 생성합니다.
+    엑셀 파일을 읽어 카카오맵 HTML을 생성합니다.
+    Geocoding은 Python에서 하지 않고 브라우저의 카카오맵 JS SDK가 처리합니다.
 
     Args:
         xlsx_path: 입력 엑셀 경로 (기본: output/ 최신 xlsx 자동 탐색)
@@ -397,55 +368,43 @@ def generate_map(
     if output_path is None:
         output_path = os.path.join(_get_output_dir(), "auction_map.html")
 
-    # 샘플 모드
     if use_sample:
         print("[MapGen] 샘플 데이터로 지도 생성 중...")
-        sample_headers = list(SAMPLE_DATA[0].keys())
-        addr_col = _find_address_column(sample_headers)
-        markers = _geocode_records(SAMPLE_DATA, addr_col, sample_headers)
-        if not markers:
-            print("[MapGen] 샘플 geocoding 실패.")
+        data = SAMPLE_DATA
+        headers = list(data[0].keys())
+        addr_col = _find_address_column(headers)
+        items_json = _build_items_json(data, headers, addr_col)
+        html_content = _build_html(items_json, len(data), " (샘플)")
+        label = "샘플 "
+    else:
+        if xlsx_path is None:
+            xlsx_path = _find_latest_xlsx()
+
+        print(f"[MapGen] 엑셀 읽기: {xlsx_path}")
+        if not os.path.exists(xlsx_path):
+            print(f"[MapGen] 파일 없음: {xlsx_path}")
             return ""
-        html_content = _build_html(markers, " (샘플)")
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        print(f"[MapGen] 샘플 지도 생성 완료: {output_path} ({len(markers)}개 마커)")
-        return output_path
 
-    # 엑셀 경로 자동 탐색
-    if xlsx_path is None:
-        xlsx_path = _find_latest_xlsx()
+        headers, data = _read_excel(xlsx_path)
+        if not data:
+            print("[MapGen] 데이터가 없습니다.")
+            return ""
 
-    print(f"[MapGen] 엑셀 읽기: {xlsx_path}")
-    if not os.path.exists(xlsx_path):
-        print(f"[MapGen] 파일 없음: {xlsx_path}")
-        return ""
+        addr_col = _find_address_column(headers)
+        if not addr_col:
+            print(f"[MapGen] 주소 컬럼을 찾을 수 없습니다. (헤더: {headers})")
+            return ""
 
-    headers, data = _read_excel(xlsx_path)
-    if not data:
-        print("[MapGen] 데이터가 없습니다.")
-        return ""
+        print(f"[MapGen] 주소 컬럼: '{addr_col}', {len(data)}건 데이터 삽입 (geocoding은 브라우저에서 처리)")
+        items_json = _build_items_json(data, headers, addr_col)
+        html_content = _build_html(items_json, len(data))
+        label = ""
 
-    addr_col = _find_address_column(headers)
-    if not addr_col:
-        print(f"[MapGen] 주소 컬럼을 찾을 수 없습니다. (헤더: {headers})")
-        return ""
-
-    print(f"[MapGen] 주소 컬럼: '{addr_col}', 총 {len(data)}건 geocoding 시작")
-
-    markers = _geocode_records(data, addr_col, headers)
-
-    if not markers:
-        print("[MapGen] 유효한 좌표가 없어 지도 생성을 건너뜁니다.")
-        return ""
-
-    html_content = _build_html(markers)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html_content)
 
-    print(f"[MapGen] 지도 생성 완료: {output_path} ({len(markers)}개 마커)")
+    print(f"[MapGen] {label}지도 생성 완료: {output_path}")
     return output_path
 
 
@@ -456,19 +415,10 @@ def upload_to_github(
     repo: str = "auction",
     branch: str = "main",
 ) -> bool:
-    """
-    GitHub REST API를 사용해 파일을 업로드(또는 갱신)합니다.
-
-    Args:
-        filepath: 업로드할 로컬 파일 경로
-        token: GitHub Personal Access Token
-        owner: 저장소 소유자
-        repo: 저장소 이름
-        branch: 대상 브랜치
-    Returns:
-        성공 여부
-    """
+    """GitHub REST API로 파일을 업로드(또는 갱신)합니다."""
     import base64
+    import urllib.request
+    import urllib.error
 
     filename = os.path.basename(filepath)
     remote_path = f"storage/{filename}"
@@ -484,13 +434,11 @@ def upload_to_github(
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    # 기존 파일 SHA 조회 (갱신 시 필요)
     sha = None
     req_get = urllib.request.Request(api_url, headers=req_headers, method="GET")
     try:
         with urllib.request.urlopen(req_get, timeout=10) as resp:
-            existing = json.loads(resp.read().decode("utf-8"))
-            sha = existing.get("sha")
+            sha = json.loads(resp.read().decode("utf-8")).get("sha")
     except urllib.error.HTTPError as e:
         if e.code != 404:
             print(f"[MapGen] GitHub SHA 조회 오류: {e}")
@@ -507,8 +455,12 @@ def upload_to_github(
     if sha:
         payload["sha"] = sha
 
-    body = json.dumps(payload).encode("utf-8")
-    req_put = urllib.request.Request(api_url, data=body, headers=req_headers, method="PUT")
+    req_put = urllib.request.Request(
+        api_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=req_headers,
+        method="PUT",
+    )
     try:
         with urllib.request.urlopen(req_put, timeout=15) as resp:
             result = json.loads(resp.read().decode("utf-8"))
