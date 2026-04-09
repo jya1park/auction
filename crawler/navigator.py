@@ -540,46 +540,72 @@ class Navigator:
                 continue
         return None
 
-    def go_to_next_page(self) -> bool:
-        """다음 페이지로 이동합니다."""
-        self.log("다음 페이지 이동 시도...")
+    def go_to_next_page(self, current_page: int = 0) -> bool:
+        """다음 페이지로 이동합니다.
 
-        # 현재 활성 페이지 번호를 찾아 current+1 번호 버튼을 직접 클릭
-        # "다음" 텍스트 버튼은 페이지 블록 이동(예: 1~10 → 11~20)이므로 사용 금지
-        current_page = self._get_current_page()
-        if current_page is not None:
+        current_page가 주어지면 current_page+1 번호 버튼을 직접 클릭합니다.
+        (AJAX 재렌더링 후 stale element 방지를 위해 매번 새로 DOM에서 탐색)
+        current_page=0이면 _get_current_page()로 DOM에서 현재 페이지를 탐색합니다.
+        번호 버튼을 찾지 못하면 '다음 블록' 버튼으로 폴백합니다.
+        """
+        # current_page 미전달 시 DOM에서 현재 페이지 탐색
+        if current_page <= 0:
+            current_page = self._get_current_page() or 0
+
+        self.log(f"다음 페이지 이동 시도 (현재={current_page})...")
+
+        # ── 전략 1: 다음 페이지 번호 버튼을 새로 찾아 클릭 (stale 방지) ──
+        if current_page > 0:
             next_page = current_page + 1
-            self.log(f"현재 페이지: {current_page}, 다음 페이지: {next_page}")
-            if self.go_to_page(next_page):
-                return True
-            self.log(f"페이지 {next_page} 버튼 없음 - 다음 블록 버튼으로 폴백")
+            xpaths = [
+                f"//a[normalize-space(text())='{next_page}']",
+                f"//button[normalize-space(text())='{next_page}']",
+                f"//span[normalize-space(text())='{next_page}']",
+                f"//td[normalize-space(text())='{next_page}']",
+            ]
+            for xpath in xpaths:
+                try:
+                    els = self.driver.find_elements(By.XPATH, xpath)
+                    for el in els:
+                        if el.is_displayed() and el.text.strip() == str(next_page):
+                            el.click()
+                            self.log(f"페이지 번호 버튼 클릭: {next_page} (xpath={xpath})")
+                            time.sleep(config.PAGE_DELAY)
+                            return True
+                except (StaleElementReferenceException, Exception):
+                    continue
 
-        # 폴백: 다음 페이지 블록 버튼 (페이지 번호 버튼이 없는 경우)
-        next_block_selectors = [
+        # ── 전략 2: '다음' 블록 버튼 (페이지 번호 버튼이 없을 때) ──
+        return self._click_next_block()
+
+    def _click_next_block(self) -> bool:
+        """'다음' 버튼(블록 이동)을 클릭합니다."""
+        next_selectors = [
+            "//a[normalize-space(text())='다음']",
+            "//button[normalize-space(text())='다음']",
+            "//a[contains(text(),'다음')]",
+            "//button[contains(text(),'다음')]",
             "//img[@alt='다음']/..",
             "//a[@title='다음 페이지']",
             "//a[contains(@onclick,'next') or contains(@onclick,'Next')]",
             "//*[contains(@class,'next') or contains(@id,'next')]",
-            "//a[normalize-space(text())='다음']",
-            "//button[normalize-space(text())='다음']",
         ]
-
-        for sel in next_block_selectors:
+        for sel in next_selectors:
             try:
                 btn = self.driver.find_element(By.XPATH, sel)
                 if btn.is_displayed() and btn.is_enabled():
                     cls = btn.get_attribute("class") or ""
                     if "disabled" in cls or "dim" in cls:
-                        self.log("다음 페이지 버튼 비활성화 (마지막 페이지)")
+                        self.log("다음 버튼 비활성화 (마지막 페이지)")
                         return False
                     btn.click()
-                    self.log(f"다음 블록 클릭: {sel}")
+                    self.log(f"다음 블록 버튼 클릭: {sel}")
                     time.sleep(config.PAGE_DELAY)
                     return True
             except (NoSuchElementException, StaleElementReferenceException):
                 continue
             except Exception as e:
-                self.log(f"  페이지 이동 오류: {e}")
+                self.log(f"  다음 블록 버튼 오류: {e}")
 
         self.log("다음 페이지 버튼 없음 (마지막 페이지)")
         return False
