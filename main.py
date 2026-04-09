@@ -6,9 +6,8 @@
     python main.py --visible    # 브라우저 창 표시
     python main.py --pages 5    # 5페이지만 수집
     python main.py --watchlist  # 찜한 물건 낙찰 조회
-    python main.py --excel      # Excel도 저장
     python main.py --debug      # 디버그 모드 (DOM 구조 출력)
-    python main.py --visible --debug --pages 3 --excel
+    python main.py --visible --debug --pages 3
 """
 import sys
 import time
@@ -19,7 +18,7 @@ from crawler.driver import create_driver, quit_driver
 from crawler.navigator import Navigator
 from crawler.list_parser import parse_list_page, get_total_count
 from crawler.detail_parser import DetailParser
-from storage.exporter import save_csv, save_excel, print_summary
+from storage.exporter import save_list_csv, save_result_csv, print_summary
 
 
 def parse_args():
@@ -35,10 +34,6 @@ def parse_args():
     parser.add_argument(
         "--pages", type=int, default=0,
         help="수집할 최대 페이지 수 (0=전체, 기본: 0)"
-    )
-    parser.add_argument(
-        "--excel", action="store_true",
-        help="Excel 파일도 저장합니다"
     )
     parser.add_argument(
         "--debug", action="store_true",
@@ -110,7 +105,7 @@ def run_watchlist_mode(driver, navigator, debug):
             print(f"  결과: 사건번호 {case_num} 조회 결과 없음")
 
     if results:
-        save_csv(results)
+        save_result_csv(results)
         print(f"\n총 {len(results)}건 조회 완료")
 
     return results
@@ -134,7 +129,6 @@ def run_crawl_mode(driver, navigator, args):
 
     if not search_ok:
         print("[Main] 검색 결과가 없거나 검색 실패. 현재 페이지 소스를 저장하고 종료합니다.")
-        # 디버그용 페이지 소스 저장
         if debug:
             with open("debug_page_source.html", "w", encoding="utf-8") as f:
                 f.write(driver.page_source)
@@ -207,11 +201,10 @@ def main():
         navigator = Navigator(driver, debug=args.debug)
 
         if args.watchlist:
-            # 찜한 물건 조회 모드
+            # 찜한 물건 조회 모드 → 매각결과 CSV 저장
             data = run_watchlist_mode(driver, navigator, args.debug)
         else:
             # 일반 크롤링 모드
-            # 법원/물건종류 설정 반영
             if args.court != config.TARGET_COURT:
                 config.TARGET_COURT = args.court
             if args.prop_type != config.TARGET_TYPE:
@@ -222,16 +215,9 @@ def main():
         # 결과 저장
         if data:
             print_summary(data)
-            csv_path = save_csv(data)
-            if args.excel:
-                xlsx_path = save_excel(data)
-
-            # 지도 생성 (Excel 저장 시, 또는 기존 엑셀이 있을 때)
-            try:
-                from storage.map_generator import generate_map
-                generate_map()
-            except Exception as map_err:
-                print(f"[Main] 지도 생성 실패 (크롤러 결과에는 영향 없음): {map_err}")
+            save_list_csv(data)
+            if args.detail:
+                save_result_csv(data)
         else:
             print("\n[Main] 수집된 데이터가 없습니다.")
 
@@ -246,7 +232,7 @@ def main():
         try:
             if 'data' in locals() and data:
                 print(f"[Main] 오류 발생 전 수집 데이터 저장 시도: {len(data)}건")
-                save_csv(data, f"emergency_save_{int(time.time())}.csv")
+                save_list_csv(data)
         except Exception:
             pass
     finally:
