@@ -232,117 +232,122 @@ def _build_html(items_json: str, total: int, title_suffix: str = "") -> str:
     총 {total}건 | 지도 표시: <span id="mapped-count">0</span>건
   </div>
 
-  <script type="text/javascript"
-    src="//dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_APP_KEY}&libraries=services,clusterer">
-  </script>
   <script>
     var ITEMS = {items_json};
 
-    var mapContainer = document.getElementById('map');
-    var map = new kakao.maps.Map(mapContainer, {{
-      center: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LNG}),
-      level: {DEFAULT_LEVEL}
-    }});
+    function initMap() {{
+      var mapContainer = document.getElementById('map');
+      var map = new kakao.maps.Map(mapContainer, {{
+        center: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LNG}),
+        level: {DEFAULT_LEVEL}
+      }});
 
-    map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
-    map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
+      map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
+      map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
 
-    var geocoder  = new kakao.maps.services.Geocoder();
-    var clusterer = new kakao.maps.MarkerClusterer({{
-      map: map,
-      averageCenter: true,
-      minLevel: 4
-    }});
+      var geocoder  = new kakao.maps.services.Geocoder();
+      var clusterer = new kakao.maps.MarkerClusterer({{
+        map: map,
+        averageCenter: true,
+        minLevel: 4
+      }});
 
-    var currentIW = null;
-    var mappedCount = 0;
-    var bounds = new kakao.maps.LatLngBounds();
-    var markerList = [];
+      var currentIW = null;
+      var mappedCount = 0;
+      var bounds = new kakao.maps.LatLngBounds();
+      var markerList = [];
 
-    // InfoWindow 닫기 (전역 함수 - 인라인 onclick에서 호출)
-    window.closeIW = function() {{
-      if (currentIW) {{ currentIW.close(); currentIW = null; }}
-    }};
-
-    function buildContent(item) {{
-      var LABELS = {{
-        '사건번호':      '사건번호',
-        '법원':          '법원',
-        '물건번호':      '물건번호',
-        '물건주소':      '주소',
-        '소재지':        '주소',
-        '주소':          '주소',
-        '물건소재지':    '주소',
-        '용도':          '용도',
-        '감정평가액':    '감정가',
-        '감정가':        '감정가',
-        '최저입찰가_표시': '최저매각가',
-        '최저입찰가':    '최저매각가',
-        '최저매각가':    '최저매각가',
-        '입찰기일':      '매각기일',
-        '매각기일':      '매각기일',
-        '진행상태':      '상태',
-        '상태':          '상태',
-        '유찰횟수':      '유찰횟수',
+      // InfoWindow 닫기 (전역 함수 - 인라인 onclick에서 호출)
+      window.closeIW = function() {{
+        if (currentIW) {{ currentIW.close(); currentIW = null; }}
       }};
-      // 중복 레이블 제거
-      var seen = {{}};
-      var rows = '';
-      Object.keys(LABELS).forEach(function(key) {{
-        var label = LABELS[key];
-        if (item[key] && !seen[label]) {{
-          seen[label] = true;
-          rows += '<tr><th>' + label + '</th><td>' + item[key] + '</td></tr>';
-        }}
-      }});
-      return '<div class="iw-wrap">'
-           + '<button class="iw-close" onclick="closeIW()">✕</button>'
-           + '<table class="iw-table">' + rows + '</table>'
-           + '</div>';
-    }}
 
-    function addMarker(item, lat, lng) {{
-      var pos    = new kakao.maps.LatLng(lat, lng);
-      var marker = new kakao.maps.Marker({{ position: pos }});
-      var iw     = new kakao.maps.InfoWindow({{
-        content: buildContent(item),
-        removable: false
-      }});
-
-      kakao.maps.event.addListener(marker, 'click', function() {{
-        closeIW();
-        iw.open(map, marker);
-        currentIW = iw;
-      }});
-
-      markerList.push(marker);
-      bounds.extend(pos);
-      mappedCount++;
-      document.getElementById('mapped-count').textContent = mappedCount;
-    }}
-
-    // 순차 geocoding (카카오 API 부하 분산)
-    var idx = 0;
-    function processNext() {{
-      if (idx >= ITEMS.length) {{
-        // 모두 완료 후 bounds 조정
-        clusterer.addMarkers(markerList);
-        if (markerList.length > 0) {{
-          map.setBounds(bounds);
-        }}
-        return;
+      function buildContent(item) {{
+        var LABELS = {{
+          '사건번호':      '사건번호',
+          '법원':          '법원',
+          '물건번호':      '물건번호',
+          '물건주소':      '주소',
+          '소재지':        '주소',
+          '주소':          '주소',
+          '물건소재지':    '주소',
+          '용도':          '용도',
+          '감정평가액':    '감정가',
+          '감정가':        '감정가',
+          '최저입찰가_표시': '최저매각가',
+          '최저입찰가':    '최저매각가',
+          '최저매각가':    '최저매각가',
+          '입찰기일':      '매각기일',
+          '매각기일':      '매각기일',
+          '진행상태':      '상태',
+          '상태':          '상태',
+          '유찰횟수':      '유찰횟수',
+        }};
+        // 중복 레이블 제거
+        var seen = {{}};
+        var rows = '';
+        Object.keys(LABELS).forEach(function(key) {{
+          var label = LABELS[key];
+          if (item[key] && !seen[label]) {{
+            seen[label] = true;
+            rows += '<tr><th>' + label + '</th><td>' + item[key] + '</td></tr>';
+          }}
+        }});
+        return '<div class="iw-wrap">'
+             + '<button class="iw-close" onclick="closeIW()">✕</button>'
+             + '<table class="iw-table">' + rows + '</table>'
+             + '</div>';
       }}
-      var item = ITEMS[idx++];
-      geocoder.addressSearch(item.addr, function(result, status) {{
-        if (status === kakao.maps.services.Status.OK) {{
-          addMarker(item, result[0].y, result[0].x);
-        }}
-        // 다음 아이템 처리 (50ms 간격으로 부하 분산)
-        setTimeout(processNext, 50);
-      }});
-    }}
 
-    processNext();
+      function addMarker(item, lat, lng) {{
+        var pos    = new kakao.maps.LatLng(lat, lng);
+        var marker = new kakao.maps.Marker({{ position: pos }});
+        var iw     = new kakao.maps.InfoWindow({{
+          content: buildContent(item),
+          removable: false
+        }});
+
+        kakao.maps.event.addListener(marker, 'click', function() {{
+          closeIW();
+          iw.open(map, marker);
+          currentIW = iw;
+        }});
+
+        markerList.push(marker);
+        bounds.extend(pos);
+        mappedCount++;
+        document.getElementById('mapped-count').textContent = mappedCount;
+      }}
+
+      // 순차 geocoding (카카오 API 부하 분산)
+      var idx = 0;
+      function processNext() {{
+        if (idx >= ITEMS.length) {{
+          // 모두 완료 후 bounds 조정
+          clusterer.addMarkers(markerList);
+          if (markerList.length > 0) {{
+            map.setBounds(bounds);
+          }}
+          return;
+        }}
+        var item = ITEMS[idx++];
+        geocoder.addressSearch(item.addr, function(result, status) {{
+          if (status === kakao.maps.services.Status.OK) {{
+            addMarker(item, result[0].y, result[0].x);
+          }}
+          // 다음 아이템 처리 (50ms 간격으로 부하 분산)
+          setTimeout(processNext, 50);
+        }});
+      }}
+
+      processNext();
+    }}
+  </script>
+  <script type="text/javascript"
+    src="//dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_APP_KEY}&libraries=services,clusterer&autoload=false">
+  </script>
+  <script>
+    kakao.maps.load(initMap);
   </script>
 </body>
 </html>
