@@ -500,30 +500,61 @@ class Navigator:
     # ──────────────────────────────────────────────
     # 10. 페이지 이동
     # ──────────────────────────────────────────────
+    def _get_current_page(self) -> Optional[int]:
+        """현재 활성 페이지 번호를 DOM에서 탐색합니다."""
+        active_selectors = [
+            "//*[contains(@class,'active') and (self::a or self::span or self::strong or self::b)]",
+            "//*[contains(@class,'current') and (self::a or self::span or self::strong or self::b)]",
+            "//*[contains(@class,'on') and (self::a or self::span or self::strong or self::b)]",
+            "//*[contains(@class,'selected') and (self::a or self::span or self::strong or self::b)]",
+            "//strong[parent::*[contains(@class,'paging') or contains(@class,'page')]]",
+            "//span[contains(@class,'num') and contains(@class,'on')]",
+        ]
+        for sel in active_selectors:
+            try:
+                els = self.driver.find_elements(By.XPATH, sel)
+                for el in els:
+                    text = el.text.strip()
+                    if text.isdigit():
+                        return int(text)
+            except Exception:
+                continue
+        return None
+
     def go_to_next_page(self) -> bool:
         """다음 페이지로 이동합니다."""
         self.log("다음 페이지 이동 시도...")
 
-        next_selectors = [
-            "//a[contains(text(),'다음')]",
-            "//button[contains(text(),'다음')]",
+        # 현재 활성 페이지 번호를 찾아 current+1 번호 버튼을 직접 클릭
+        # "다음" 텍스트 버튼은 페이지 블록 이동(예: 1~10 → 11~20)이므로 사용 금지
+        current_page = self._get_current_page()
+        if current_page is not None:
+            next_page = current_page + 1
+            self.log(f"현재 페이지: {current_page}, 다음 페이지: {next_page}")
+            if self.go_to_page(next_page):
+                return True
+            self.log(f"페이지 {next_page} 버튼 없음 - 다음 블록 버튼으로 폴백")
+
+        # 폴백: 다음 페이지 블록 버튼 (페이지 번호 버튼이 없는 경우)
+        next_block_selectors = [
             "//img[@alt='다음']/..",
-            "//*[contains(@class,'next') or contains(@id,'next')]",
             "//a[@title='다음 페이지']",
             "//a[contains(@onclick,'next') or contains(@onclick,'Next')]",
+            "//*[contains(@class,'next') or contains(@id,'next')]",
+            "//a[normalize-space(text())='다음']",
+            "//button[normalize-space(text())='다음']",
         ]
 
-        for sel in next_selectors:
+        for sel in next_block_selectors:
             try:
                 btn = self.driver.find_element(By.XPATH, sel)
                 if btn.is_displayed() and btn.is_enabled():
-                    # 비활성화 여부 확인
                     cls = btn.get_attribute("class") or ""
                     if "disabled" in cls or "dim" in cls:
                         self.log("다음 페이지 버튼 비활성화 (마지막 페이지)")
                         return False
                     btn.click()
-                    self.log(f"다음 페이지 클릭: {sel}")
+                    self.log(f"다음 블록 클릭: {sel}")
                     time.sleep(config.PAGE_DELAY)
                     return True
             except (NoSuchElementException, StaleElementReferenceException):
