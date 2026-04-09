@@ -234,8 +234,12 @@ def _build_html(items_json: str, total: int, title_suffix: str = "") -> str:
 
   <script>
     var ITEMS = {items_json};
-
-    function initMap() {{
+  </script>
+  <script type="text/javascript"
+    src="//dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_APP_KEY}&libraries=services,clusterer&autoload=false">
+  </script>
+  <script>
+    kakao.maps.load(function() {{
       var mapContainer = document.getElementById('map');
       var map = new kakao.maps.Map(mapContainer, {{
         center: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LNG}),
@@ -341,13 +345,7 @@ def _build_html(items_json: str, total: int, title_suffix: str = "") -> str:
       }}
 
       processNext();
-    }}
-  </script>
-  <script type="text/javascript"
-    src="//dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_APP_KEY}&libraries=services,clusterer&autoload=false">
-  </script>
-  <script>
-    kakao.maps.load(initMap);
+    }});
   </script>
 </body>
 </html>
