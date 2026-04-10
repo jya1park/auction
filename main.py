@@ -278,7 +278,7 @@ def run_result_mode(driver, args) -> list:
             print(f"[Main] 최대 페이지({max_pages}) 도달")
             break
 
-        has_next = result_nav.go_to_next_page()
+        has_next = result_nav.go_to_next_page(current_page=page)
         if not has_next:
             print("[Main] 매각결과 마지막 페이지")
             break
