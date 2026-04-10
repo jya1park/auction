@@ -130,6 +130,10 @@ def parse_result_page(page_source: str, debug: bool = False) -> List[Dict]:
             if col in row_data and row_data[col]:
                 row_data[col] = _extract_date(row_data[col]) or row_data[col]
 
+        # 물건번호 기본값 처리
+        if "물건번호" in row_data and not row_data["물건번호"].strip():
+            row_data["물건번호"] = "1"
+
         # 유효 행 필터링 (사건번호 또는 소재지가 있어야 함)
         if row_data.get("사건번호") or row_data.get("소재지"):
             results.append(row_data)
