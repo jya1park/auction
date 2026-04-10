@@ -544,7 +544,9 @@ class Navigator:
         """다음 페이지로 이동합니다.
 
         current_page가 주어지면 current_page+1 번호 버튼을 직접 클릭합니다.
-        (AJAX 재렌더링 후 stale element 방지를 위해 매번 새로 DOM에서 탐색)
+        WebSquare AJAX 재렌더링 후 stale element 방지를 위해:
+          - 페이지 버튼은 클릭 직전에 항상 새로 find_elements()로 탐색
+          - 클릭 후 old_element의 staleness_of()로 DOM 재렌더링 완료 대기
         current_page=0이면 _get_current_page()로 DOM에서 현재 페이지를 탐색합니다.
         번호 버튼을 찾지 못하면 '다음 블록' 버튼으로 폴백합니다.
         """
@@ -557,6 +559,15 @@ class Navigator:
         # ── 전략 1: 다음 페이지 번호 버튼을 새로 찾아 클릭 (stale 방지) ──
         if current_page > 0:
             next_page = current_page + 1
+
+            # 클릭 전: 페이지 변경 감지용 기준 요소 확보 (클릭 후 stale 됨)
+            old_element = None
+            try:
+                old_element = self.driver.find_element(By.XPATH, "//tbody/tr[1]")
+            except Exception:
+                pass
+
+            found = False
             xpaths = [
                 f"//a[normalize-space(text())='{next_page}']",
                 f"//button[normalize-space(text())='{next_page}']",
@@ -564,23 +575,29 @@ class Navigator:
                 f"//td[normalize-space(text())='{next_page}']",
             ]
             for xpath in xpaths:
+                if found:
+                    break
                 try:
+                    # 매번 클릭 직전에 새로 탐색 — 이전 루프에서 찾은 요소 재사용 금지
                     els = self.driver.find_elements(By.XPATH, xpath)
                     for el in els:
                         if el.is_displayed() and el.text.strip() == str(next_page):
                             el.click()
                             self.log(f"페이지 번호 버튼 클릭: {next_page} (xpath={xpath})")
-                            time.sleep(3)  # AJAX 재렌더링 대기 (충분한 시간 확보)
-                            # 페이지가 실제로 변경되었는지 확인
-                            actual_page = self._get_current_page()
-                            if actual_page == next_page:
-                                self.log(f"페이지 변경 확인: {actual_page}")
-                                return True
-                            self.log(f"페이지 변경 미확인 (DOM={actual_page}), 1초 추가 대기")
-                            time.sleep(1)
-                            return True
+                            found = True
+                            break
                 except (StaleElementReferenceException, Exception):
                     continue
+
+            if found:
+                # DOM 재렌더링 대기: 클릭 전 기준 요소가 stale 될 때까지 대기
+                if old_element:
+                    try:
+                        WebDriverWait(self.driver, 10).until(EC.staleness_of(old_element))
+                    except Exception:
+                        pass
+                time.sleep(3)  # 추가 버퍼 (AJAX 완전 완료 보장)
+                return True
 
         # ── 전략 2: '다음' 블록 버튼 (페이지 번호 버튼이 없을 때) ──
         return self._click_next_block()

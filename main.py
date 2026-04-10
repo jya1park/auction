@@ -352,8 +352,8 @@ def run_crawl_mode(driver, navigator, args):
             print(f"[Main] 최대 페이지({max_pages}) 도달")
             break
 
-        # 다음 페이지 이동
-        has_next = navigator.go_to_next_page()
+        # 다음 페이지 이동 (current_page 전달로 DOM 재탐색 불필요)
+        has_next = navigator.go_to_next_page(current_page=page)
         if not has_next:
             print("[Main] 마지막 페이지 도달")
             break
