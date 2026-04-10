@@ -563,118 +563,48 @@ class Navigator:
         return max_page
 
     def go_to_next_page(self, current_page: int = 0) -> bool:
-        """다음 페이지로 이동합니다.
+        next_page = current_page + 1
+        self.log(f"[page] {current_page} -> {next_page}")
 
-        current_page가 주어지면 current_page+1 번호 버튼을 직접 클릭합니다.
-        WebSquare AJAX 재렌더링 후 stale element 방지를 위해:
-          - 페이지 버튼은 클릭 직전에 항상 새로 find_elements()로 탐색
-          - 클릭 후 old_element의 staleness_of()로 DOM 재렌더링 완료 대기
-        current_page=0이면 _get_current_page()로 DOM에서 현재 페이지를 탐색합니다.
-        번호 버튼을 찾지 못하면 '다음 블록' 버튼으로 폴백합니다.
-        """
-        # current_page 미전달 시 DOM에서 현재 페이지 탐색
-        if current_page <= 0:
-            current_page = self._get_current_page() or 0
-
-        self.log(f"다음 페이지 이동 시도 (현재={current_page})...")
-
-        # ── 전략 1: 다음 페이지 번호 버튼을 새로 찾아 클릭 (stale 방지) ──
-        if current_page > 0:
-            next_page = current_page + 1
-
-            # _get_total_pages()는 현재 블록의 최대값만 반환하므로
-            # 블록 경계(예: 10→11)에서 잘못된 종료를 유발함 → 가드 제거
-
-            # next_page 번호 버튼이 DOM에 존재하는지 먼저 확인
+        def _try_click_page(page_num):
             xpaths = [
-                f"//a[normalize-space(text())='{next_page}']",
-                f"//button[normalize-space(text())='{next_page}']",
-                f"//span[normalize-space(text())='{next_page}']",
-                f"//td[normalize-space(text())='{next_page}']",
+                f"//a[normalize-space(text())='{page_num}']",
+                f"//button[normalize-space(text())='{page_num}']",
+                f"//span[normalize-space(text())='{page_num}']",
+                f"//td[normalize-space(text())='{page_num}']",
             ]
-            next_page_btn_exists = False
             for xpath in xpaths:
                 try:
                     els = self.driver.find_elements(By.XPATH, xpath)
                     for el in els:
-                        if el.is_displayed() and el.text.strip() == str(next_page):
-                            next_page_btn_exists = True
-                            break
+                        if el.is_displayed() and el.text.strip() == str(page_num):
+                            try:
+                                old_el = self.driver.find_element(By.XPATH, "//tbody/tr[1]")
+                            except Exception:
+                                old_el = None
+                            el.click()
+                            if old_el:
+                                try:
+                                    WebDriverWait(self.driver, 10).until(EC.staleness_of(old_el))
+                                except Exception:
+                                    pass
+                            time.sleep(config.PAGE_DELAY + 1)
+                            return True
                 except Exception:
                     continue
-                if next_page_btn_exists:
-                    break
+            return False
 
-            # next_page 버튼이 없으면 다음 블록 이동 후 해당 페이지 버튼 클릭
-            if not next_page_btn_exists:
-                self.log(f"페이지 {next_page} 버튼 DOM에 없음 → 다음 블록 시도")
-                if not self._click_next_block():
-                    return False
-                # 다음 블록 로드 대기 후 next_page 버튼을 직접 클릭
-                time.sleep(2)
-                for xpath in xpaths:
-                    try:
-                        els = self.driver.find_elements(By.XPATH, xpath)
-                        for el in els:
-                            if el.is_displayed() and el.text.strip() == str(next_page):
-                                el.click()
-                                self.log(f"블록 전환 후 페이지 {next_page} 버튼 클릭")
-                                time.sleep(3)
-                                return True
-                    except Exception:
-                        continue
-                # 새 블록에서도 next_page 버튼을 찾지 못하면 마지막 페이지
-                self.log(f"블록 전환 후에도 페이지 {next_page} 버튼 없음 → 마지막 페이지")
-                return False
+        if _try_click_page(next_page):
+            return True
 
-            # 클릭 전: 페이지 변경 감지용 기준 요소 확보 (클릭 후 stale 됨)
-            old_element = None
-            try:
-                old_element = self.driver.find_element(By.XPATH, "//tbody/tr[1]")
-            except Exception:
-                pass
-
-            found = False
-            for xpath in xpaths:
-                if found:
-                    break
-                try:
-                    # 매번 클릭 직전에 새로 탐색 — 이전 루프에서 찾은 요소 재사용 금지
-                    els = self.driver.find_elements(By.XPATH, xpath)
-                    for el in els:
-                        if el.is_displayed() and el.text.strip() == str(next_page):
-                            el.click()
-                            self.log(f"페이지 번호 버튼 클릭: {next_page} (xpath={xpath})")
-                            found = True
-                            break
-                except (StaleElementReferenceException, Exception):
-                    continue
-
-            if found:
-                # DOM 재렌더링 대기: 클릭 전 기준 요소가 stale 될 때까지 대기
-                if old_element:
-                    try:
-                        WebDriverWait(self.driver, 10).until(EC.staleness_of(old_element))
-                    except Exception:
-                        pass
-                time.sleep(3)  # 추가 버퍼 (AJAX 완전 완료 보장)
-                # 클릭 후 실제 페이지가 변경됐는지 검증
-                # None이면 판단 불가 → 계속 진행. 명확히 같은 페이지에 머문 경우만 실패 처리
-                new_page = self._get_current_page()
-                if new_page is not None and new_page <= current_page:
-                    self.log(f"페이지 변경 실패 (예상={next_page}, 실제={new_page}) → 마지막 페이지")
-                    return False
-                return True
-
-        # ── 전략 2: '다음' 블록 버튼 (current_page 미확인 시 폴백) ──
         if not self._click_next_block():
             return False
-        # 블록 이동 후에도 페이지 변경 검증
-        new_page = self._get_current_page()
-        if new_page is not None and current_page > 0 and new_page <= current_page:
-            self.log(f"다음 블록 클릭 후 페이지 미변경 (현재={new_page}) → 마지막 페이지")
-            return False
-        return True
+
+        time.sleep(2)
+        if _try_click_page(next_page):
+            return True
+
+        return False
 
     def _click_next_block(self) -> bool:
         """'다음' 버튼(블록 이동)을 클릭합니다."""
