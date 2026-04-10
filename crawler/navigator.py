@@ -540,6 +540,28 @@ class Navigator:
                 continue
         return None
 
+    def _get_total_pages(self) -> Optional[int]:
+        """페이지네이션 UI에서 마지막 페이지 번호를 탐색합니다."""
+        number_selectors = [
+            "//*[contains(@class,'paging') or contains(@class,'pagination') or contains(@class,'page')]//*[self::a or self::button or self::span or self::td]",
+            "//div[contains(@class,'paging')]//a",
+            "//div[contains(@class,'page')]//a",
+            "//td[contains(@class,'page')]//a",
+        ]
+        max_page = None
+        for sel in number_selectors:
+            try:
+                els = self.driver.find_elements(By.XPATH, sel)
+                for el in els:
+                    text = el.text.strip()
+                    if text.isdigit():
+                        p = int(text)
+                        if max_page is None or p > max_page:
+                            max_page = p
+            except Exception:
+                continue
+        return max_page
+
     def go_to_next_page(self, current_page: int = 0) -> bool:
         """다음 페이지로 이동합니다.
 
@@ -560,6 +582,44 @@ class Navigator:
         if current_page > 0:
             next_page = current_page + 1
 
+            # 전체 페이지 수 확인: next_page가 범위를 초과하면 즉시 종료
+            total_pages = self._get_total_pages()
+            if total_pages and next_page > total_pages:
+                self.log(f"마지막 페이지 도달 (현재={current_page}, 전체={total_pages})")
+                return False
+
+            # next_page 번호 버튼이 DOM에 존재하는지 먼저 확인
+            xpaths = [
+                f"//a[normalize-space(text())='{next_page}']",
+                f"//button[normalize-space(text())='{next_page}']",
+                f"//span[normalize-space(text())='{next_page}']",
+                f"//td[normalize-space(text())='{next_page}']",
+            ]
+            next_page_btn_exists = False
+            for xpath in xpaths:
+                try:
+                    els = self.driver.find_elements(By.XPATH, xpath)
+                    for el in els:
+                        if el.is_displayed() and el.text.strip() == str(next_page):
+                            next_page_btn_exists = True
+                            break
+                except Exception:
+                    continue
+                if next_page_btn_exists:
+                    break
+
+            # next_page 버튼이 없으면 다음 블록 이동 시도
+            if not next_page_btn_exists:
+                self.log(f"페이지 {next_page} 버튼 DOM에 없음 → 다음 블록 시도")
+                if not self._click_next_block():
+                    return False
+                # 다음 블록 클릭 후 페이지가 실제로 변경됐는지 검증
+                new_page = self._get_current_page()
+                if new_page is not None and new_page <= current_page:
+                    self.log(f"다음 블록 클릭 후 페이지 미변경 (현재={new_page}) → 마지막 페이지")
+                    return False
+                return True
+
             # 클릭 전: 페이지 변경 감지용 기준 요소 확보 (클릭 후 stale 됨)
             old_element = None
             try:
@@ -568,12 +628,6 @@ class Navigator:
                 pass
 
             found = False
-            xpaths = [
-                f"//a[normalize-space(text())='{next_page}']",
-                f"//button[normalize-space(text())='{next_page}']",
-                f"//span[normalize-space(text())='{next_page}']",
-                f"//td[normalize-space(text())='{next_page}']",
-            ]
             for xpath in xpaths:
                 if found:
                     break
@@ -597,10 +651,22 @@ class Navigator:
                     except Exception:
                         pass
                 time.sleep(3)  # 추가 버퍼 (AJAX 완전 완료 보장)
+                # 클릭 후 실제 페이지가 next_page로 변경됐는지 검증
+                new_page = self._get_current_page()
+                if new_page is not None and new_page != next_page:
+                    self.log(f"페이지 변경 실패 (예상={next_page}, 실제={new_page}) → 마지막 페이지")
+                    return False
                 return True
 
-        # ── 전략 2: '다음' 블록 버튼 (페이지 번호 버튼이 없을 때) ──
-        return self._click_next_block()
+        # ── 전략 2: '다음' 블록 버튼 (current_page 미확인 시 폴백) ──
+        if not self._click_next_block():
+            return False
+        # 블록 이동 후에도 페이지 변경 검증
+        new_page = self._get_current_page()
+        if new_page is not None and current_page > 0 and new_page <= current_page:
+            self.log(f"다음 블록 클릭 후 페이지 미변경 (현재={new_page}) → 마지막 페이지")
+            return False
+        return True
 
     def _click_next_block(self) -> bool:
         """'다음' 버튼(블록 이동)을 클릭합니다."""
@@ -619,7 +685,8 @@ class Navigator:
                 btn = self.driver.find_element(By.XPATH, sel)
                 if btn.is_displayed() and btn.is_enabled():
                     cls = btn.get_attribute("class") or ""
-                    if "disabled" in cls or "dim" in cls:
+                    aria_disabled = btn.get_attribute("aria-disabled") or ""
+                    if "disabled" in cls or "dim" in cls or aria_disabled.lower() == "true":
                         self.log("다음 버튼 비활성화 (마지막 페이지)")
                         return False
                     btn.click()
