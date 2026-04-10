@@ -584,7 +584,9 @@ class Navigator:
 
             # 전체 페이지 수 확인: next_page가 범위를 초과하면 즉시 종료
             total_pages = self._get_total_pages()
-            if total_pages and next_page > total_pages:
+            self.log(f"total_pages={total_pages}, next_page={next_page}")
+            # total_pages가 1이면 신뢰할 수 없으므로(초기 로딩 등) > 1인 경우만 가드 적용
+            if total_pages and total_pages > 1 and next_page > total_pages:
                 self.log(f"마지막 페이지 도달 (현재={current_page}, 전체={total_pages})")
                 return False
 
@@ -652,8 +654,9 @@ class Navigator:
                         pass
                 time.sleep(3)  # 추가 버퍼 (AJAX 완전 완료 보장)
                 # 클릭 후 실제 페이지가 next_page로 변경됐는지 검증
+                # None이면 판단 불가 → 계속 진행. 명확히 이전 페이지로 돌아간 경우만 실패 처리
                 new_page = self._get_current_page()
-                if new_page is not None and new_page != next_page:
+                if new_page is not None and new_page > 1 and new_page <= current_page:
                     self.log(f"페이지 변경 실패 (예상={next_page}, 실제={new_page}) → 마지막 페이지")
                     return False
                 return True
