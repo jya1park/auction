@@ -103,30 +103,6 @@ def _find_latest_xlsx() -> str:
     return max(candidates, key=os.path.getmtime)
 
 
-def _find_latest_csv() -> str:
-    """output/ 디렉토리에서 가장 최근 courtauction_*.csv 파일을 반환합니다."""
-    out_dir = _get_output_dir()
-    candidates = glob.glob(os.path.join(out_dir, "courtauction_*.csv"))
-    if not candidates:
-        return ""
-    return max(candidates, key=os.path.getmtime)
-
-
-def _read_csv(csv_path: str) -> Tuple[List[str], List[Dict]]:
-    """CSV 파일에서 헤더와 데이터를 읽어 반환합니다 (인코딩 자동 감지)."""
-    import csv as csv_mod
-    for enc in ("utf-8-sig", "utf-8", "cp949"):
-        try:
-            with open(csv_path, "r", newline="", encoding=enc) as f:
-                reader = csv_mod.DictReader(f)
-                headers = list(reader.fieldnames or [])
-                rows = [dict(r) for r in reader]
-            return headers, rows
-        except UnicodeDecodeError:
-            continue
-    return [], []
-
-
 def _read_excel(xlsx_path: str) -> Tuple[List[str], List[Dict]]:
     """경매목록 시트에서 헤더와 데이터를 읽어 반환합니다."""
     try:
@@ -259,117 +235,115 @@ def _build_html(items_json: str, total: int, title_suffix: str = "") -> str:
   <script>
     var ITEMS = {items_json};
   </script>
-  <script type="text/javascript"
-    src="//dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_APP_KEY}&libraries=services,clusterer&autoload=false">
-  </script>
+  <script src="//dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_APP_KEY}&libraries=services,clusterer"></script>
   <script>
-    kakao.maps.load(function() {{
-      var mapContainer = document.getElementById('map');
-      var map = new kakao.maps.Map(mapContainer, {{
-        center: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LNG}),
-        level: {DEFAULT_LEVEL}
-      }});
+    window.onload = function() {{
+        var mapContainer = document.getElementById('map');
+        var map = new kakao.maps.Map(mapContainer, {{
+          center: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LNG}),
+          level: {DEFAULT_LEVEL}
+        }});
 
-      map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
-      map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
+        map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
+        map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
 
-      var geocoder  = new kakao.maps.services.Geocoder();
-      var clusterer = new kakao.maps.MarkerClusterer({{
-        map: map,
-        averageCenter: true,
-        minLevel: 4
-      }});
+        var geocoder  = new kakao.maps.services.Geocoder();
+        var clusterer = new kakao.maps.MarkerClusterer({{
+          map: map,
+          averageCenter: true,
+          minLevel: 4
+        }});
 
-      var currentIW = null;
-      var mappedCount = 0;
-      var bounds = new kakao.maps.LatLngBounds();
-      var markerList = [];
+        var currentIW = null;
+        var mappedCount = 0;
+        var bounds = new kakao.maps.LatLngBounds();
+        var markerList = [];
 
-      // InfoWindow 닫기 (전역 함수 - 인라인 onclick에서 호출)
-      window.closeIW = function() {{
-        if (currentIW) {{ currentIW.close(); currentIW = null; }}
-      }};
-
-      function buildContent(item) {{
-        var LABELS = {{
-          '사건번호':      '사건번호',
-          '법원':          '법원',
-          '물건번호':      '물건번호',
-          '물건주소':      '주소',
-          '소재지':        '주소',
-          '주소':          '주소',
-          '물건소재지':    '주소',
-          '용도':          '용도',
-          '감정평가액':    '감정가',
-          '감정가':        '감정가',
-          '최저입찰가_표시': '최저매각가',
-          '최저입찰가':    '최저매각가',
-          '최저매각가':    '최저매각가',
-          '입찰기일':      '매각기일',
-          '매각기일':      '매각기일',
-          '진행상태':      '상태',
-          '상태':          '상태',
-          '유찰횟수':      '유찰횟수',
+        // InfoWindow 닫기 (전역 함수 - 인라인 onclick에서 호출)
+        window.closeIW = function() {{
+          if (currentIW) {{ currentIW.close(); currentIW = null; }}
         }};
-        // 중복 레이블 제거
-        var seen = {{}};
-        var rows = '';
-        Object.keys(LABELS).forEach(function(key) {{
-          var label = LABELS[key];
-          if (item[key] && !seen[label]) {{
-            seen[label] = true;
-            rows += '<tr><th>' + label + '</th><td>' + item[key] + '</td></tr>';
-          }}
-        }});
-        return '<div class="iw-wrap">'
-             + '<button class="iw-close" onclick="closeIW()">✕</button>'
-             + '<table class="iw-table">' + rows + '</table>'
-             + '</div>';
-      }}
 
-      function addMarker(item, lat, lng) {{
-        var pos    = new kakao.maps.LatLng(lat, lng);
-        var marker = new kakao.maps.Marker({{ position: pos }});
-        var iw     = new kakao.maps.InfoWindow({{
-          content: buildContent(item),
-          removable: false
-        }});
-
-        kakao.maps.event.addListener(marker, 'click', function() {{
-          closeIW();
-          iw.open(map, marker);
-          currentIW = iw;
-        }});
-
-        markerList.push(marker);
-        bounds.extend(pos);
-        mappedCount++;
-        document.getElementById('mapped-count').textContent = mappedCount;
-      }}
-
-      // 순차 geocoding (카카오 API 부하 분산)
-      var idx = 0;
-      function processNext() {{
-        if (idx >= ITEMS.length) {{
-          // 모두 완료 후 bounds 조정
-          clusterer.addMarkers(markerList);
-          if (markerList.length > 0) {{
-            map.setBounds(bounds);
-          }}
-          return;
+        function buildContent(item) {{
+          var LABELS = {{
+            '사건번호':      '사건번호',
+            '법원':          '법원',
+            '물건번호':      '물건번호',
+            '물건주소':      '주소',
+            '소재지':        '주소',
+            '주소':          '주소',
+            '물건소재지':    '주소',
+            '용도':          '용도',
+            '감정평가액':    '감정가',
+            '감정가':        '감정가',
+            '최저입찰가_표시': '최저매각가',
+            '최저입찰가':    '최저매각가',
+            '최저매각가':    '최저매각가',
+            '입찰기일':      '매각기일',
+            '매각기일':      '매각기일',
+            '진행상태':      '상태',
+            '상태':          '상태',
+            '유찰횟수':      '유찰횟수',
+          }};
+          // 중복 레이블 제거
+          var seen = {{}};
+          var rows = '';
+          Object.keys(LABELS).forEach(function(key) {{
+            var label = LABELS[key];
+            if (item[key] && !seen[label]) {{
+              seen[label] = true;
+              rows += '<tr><th>' + label + '</th><td>' + item[key] + '</td></tr>';
+            }}
+          }});
+          return '<div class="iw-wrap">'
+               + '<button class="iw-close" onclick="closeIW()">✕</button>'
+               + '<table class="iw-table">' + rows + '</table>'
+               + '</div>';
         }}
-        var item = ITEMS[idx++];
-        geocoder.addressSearch(item.addr, function(result, status) {{
-          if (status === kakao.maps.services.Status.OK) {{
-            addMarker(item, result[0].y, result[0].x);
-          }}
-          // 다음 아이템 처리 (50ms 간격으로 부하 분산)
-          setTimeout(processNext, 50);
-        }});
-      }}
 
-      processNext();
-    }});
+        function addMarker(item, lat, lng) {{
+          var pos    = new kakao.maps.LatLng(lat, lng);
+          var marker = new kakao.maps.Marker({{ position: pos }});
+          var iw     = new kakao.maps.InfoWindow({{
+            content: buildContent(item),
+            removable: false
+          }});
+
+          kakao.maps.event.addListener(marker, 'click', function() {{
+            closeIW();
+            iw.open(map, marker);
+            currentIW = iw;
+          }});
+
+          markerList.push(marker);
+          bounds.extend(pos);
+          mappedCount++;
+          document.getElementById('mapped-count').textContent = mappedCount;
+        }}
+
+        // 순차 geocoding (카카오 API 부하 분산)
+        var idx = 0;
+        function processNext() {{
+          if (idx >= ITEMS.length) {{
+            // 모두 완료 후 bounds 조정
+            clusterer.addMarkers(markerList);
+            if (markerList.length > 0) {{
+              map.setBounds(bounds);
+            }}
+            return;
+          }}
+          var item = ITEMS[idx++];
+          geocoder.addressSearch(item.addr, function(result, status) {{
+            if (status === kakao.maps.services.Status.OK) {{
+              addMarker(item, result[0].y, result[0].x);
+            }}
+            // 다음 아이템 처리 (50ms 간격으로 부하 분산)
+            setTimeout(processNext, 50);
+          }});
+        }}
+
+        processNext();
+    }};
   </script>
 </body>
 </html>
@@ -377,18 +351,18 @@ def _build_html(items_json: str, total: int, title_suffix: str = "") -> str:
 
 
 def generate_map(
-    csv_path: str = None,
+    xlsx_path: str = None,
     output_path: str = None,
     use_sample: bool = False,
 ) -> str:
     """
-    CSV 파일을 읽어 카카오맵 HTML을 생성합니다.
+    엑셀 파일을 읽어 카카오맵 HTML을 생성합니다.
     Geocoding은 Python에서 하지 않고 브라우저의 카카오맵 JS SDK가 처리합니다.
 
     Args:
-        csv_path: 입력 CSV 경로 (기본: output/courtauction_list.csv 또는 최신 courtauction_*.csv)
+        xlsx_path: 입력 엑셀 경로 (기본: output/ 최신 xlsx 자동 탐색)
         output_path: 출력 HTML 경로 (기본: output/auction_map.html)
-        use_sample: True이면 CSV 없이 샘플 더미 데이터로 HTML 생성
+        use_sample: True이면 엑셀 없이 샘플 더미 데이터로 HTML 생성
     Returns:
         생성된 HTML 파일 경로 (실패 시 빈 문자열)
     """
@@ -404,17 +378,15 @@ def generate_map(
         html_content = _build_html(items_json, len(data), " (샘플)")
         label = "샘플 "
     else:
-        # CSV 경로 결정: 명시 경로 → courtauction_list.csv → 최신 timestamped CSV
-        if csv_path is None:
-            fixed = os.path.join(_get_output_dir(), "courtauction_list.csv")
-            csv_path = fixed if os.path.exists(fixed) else _find_latest_csv()
+        if xlsx_path is None:
+            xlsx_path = _find_latest_xlsx()
 
-        if not csv_path or not os.path.exists(csv_path):
-            print(f"[MapGen] CSV 파일을 찾을 수 없습니다: {csv_path}")
+        print(f"[MapGen] 엑셀 읽기: {xlsx_path}")
+        if not os.path.exists(xlsx_path):
+            print(f"[MapGen] 파일 없음: {xlsx_path}")
             return ""
 
-        print(f"[MapGen] CSV 읽기: {csv_path}")
-        headers, data = _read_csv(csv_path)
+        headers, data = _read_excel(xlsx_path)
         if not data:
             print("[MapGen] 데이터가 없습니다.")
             return ""
@@ -424,7 +396,7 @@ def generate_map(
             print(f"[MapGen] 주소 컬럼을 찾을 수 없습니다. (헤더: {headers})")
             return ""
 
-        print(f"[MapGen] 주소 컬럼: '{addr_col}', {len(data)}건 → 지도 생성 (geocoding은 브라우저에서 처리)")
+        print(f"[MapGen] 주소 컬럼: '{addr_col}', {len(data)}건 데이터 삽입 (geocoding은 브라우저에서 처리)")
         items_json = _build_items_json(data, headers, addr_col)
         html_content = _build_html(items_json, len(data))
         label = ""
