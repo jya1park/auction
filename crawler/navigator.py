@@ -563,10 +563,12 @@ class Navigator:
         return max_page
 
     def go_to_next_page(self, current_page: int = 0) -> bool:
+        """다음 페이지로 이동. 성공하면 True, 마지막 페이지면 False."""
         next_page = current_page + 1
-        self.log(f"[page] {current_page} -> {next_page}")
+        self.log(f"[페이지이동] {current_page} → {next_page} 시도")
 
-        def _try_click_page(page_num):
+        def _try_click_page(page_num: int) -> bool:
+            """지정한 페이지 번호 버튼을 찾아 클릭. 성공하면 True."""
             xpaths = [
                 f"//a[normalize-space(text())='{page_num}']",
                 f"//button[normalize-space(text())='{page_num}']",
@@ -585,27 +587,34 @@ class Navigator:
                             el.click()
                             if old_el:
                                 try:
-                                    WebDriverWait(self.driver, 10).until(EC.staleness_of(old_el))
+                                    WebDriverWait(self.driver, 10).until(
+                                        EC.staleness_of(old_el)
+                                    )
                                 except Exception:
                                     pass
                             time.sleep(config.PAGE_DELAY + 1)
+                            self.log(f"[페이지이동] 페이지 {page_num} 클릭 성공")
                             return True
                 except Exception:
                     continue
             return False
 
+        # 1) 다음 페이지 버튼이 현재 블록에 있으면 바로 클릭
         if _try_click_page(next_page):
             return True
 
+        # 2) 버튼이 없으면 → 다음 블록으로 전환 후 재시도
+        self.log(f"[페이지이동] {next_page} 버튼 없음 → 다음 블록 시도")
         if not self._click_next_block():
+            self.log("[페이지이동] 다음 블록 없음 → 마지막 페이지")
             return False
 
-        time.sleep(2)
+        time.sleep(2)  # 블록 전환 대기
         if _try_click_page(next_page):
             return True
 
+        self.log(f"[페이지이동] 블록 전환 후에도 {next_page} 없음 → 마지막 페이지")
         return False
-
     def _click_next_block(self) -> bool:
         """'다음' 버튼(블록 이동)을 클릭합니다."""
         next_selectors = [
