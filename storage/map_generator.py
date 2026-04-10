@@ -337,8 +337,8 @@ def _build_html(items_json: str, total: int, title_suffix: str = "") -> str:
             if (status === kakao.maps.services.Status.OK) {{
               addMarker(item, result[0].y, result[0].x);
             }}
-            // 다음 아이템 처리 (50ms 간격으로 부하 분산)
-            setTimeout(processNext, 50);
+            // 다음 아이템 처리 (300ms 간격으로 카카오 API 부하 분산)
+            setTimeout(processNext, 300);
           }});
         }}
 

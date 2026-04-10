@@ -570,7 +570,14 @@ class Navigator:
                         if el.is_displayed() and el.text.strip() == str(next_page):
                             el.click()
                             self.log(f"페이지 번호 버튼 클릭: {next_page} (xpath={xpath})")
-                            time.sleep(config.PAGE_DELAY)
+                            time.sleep(3)  # AJAX 재렌더링 대기 (충분한 시간 확보)
+                            # 페이지가 실제로 변경되었는지 확인
+                            actual_page = self._get_current_page()
+                            if actual_page == next_page:
+                                self.log(f"페이지 변경 확인: {actual_page}")
+                                return True
+                            self.log(f"페이지 변경 미확인 (DOM={actual_page}), 1초 추가 대기")
+                            time.sleep(1)
                             return True
                 except (StaleElementReferenceException, Exception):
                     continue
