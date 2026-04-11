@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         법원경매 사건번호 자동검색
 // @namespace    https://www.courtauction.go.kr/
-// @version      1.2
+// @version      2.0
 // @description  경매지도에서 사건번호 클릭 시 법원 선택 · 사건번호 입력 · 검색 자동 실행
 // @author       courtauction-crawler
 // @match        https://www.courtauction.go.kr/*
@@ -23,188 +23,174 @@
         return params;
     }
 
-    var p          = getHashParams();
+    var p            = getHashParams();
     var TARGET_CASE  = p['caseNo'];
-    var TARGET_COURT = p['court'] || '';   // 예: "수원지방법원"
+    var TARGET_COURT = p['court'] || '';
 
-    if (!TARGET_CASE) return;   // 자동검색 파라미터 없으면 스크립트 종료
+    if (!TARGET_CASE) return;
 
     console.log('[경매자동검색] 사건번호:', TARGET_CASE, '/ 법원:', TARGET_COURT);
 
-    /* ── 유틸 ──────────────────────────────────────────────────────── */
+    /* ── 이벤트 발생 헬퍼 ──────────────────────────────────────────── */
     function trigger(el, events) {
         (events || ['input', 'change', 'blur']).forEach(function (ev) {
             el.dispatchEvent(new Event(ev, { bubbles: true }));
         });
     }
 
-    /* ── 법원 콤보박스 채우기 ────────────────────────────────────── */
+    /* ────────────────────────────────────────────────────────────────
+       1. 법원 선택
+    ──────────────────────────────────────────────────────────────── */
     function fillCourt() {
-        if (!TARGET_COURT) return true;   // 법원 정보 없으면 스킵
+        if (!TARGET_COURT) return true;
 
-        /* 1) <select> 요소 직접 매칭 */
-        var selects = document.querySelectorAll('select');
-        for (var i = 0; i < selects.length; i++) {
-            var sel = selects[i];
-            for (var j = 0; j < sel.options.length; j++) {
-                var optText = sel.options[j].text;
-                if (optText === TARGET_COURT ||
-                    optText.includes(TARGET_COURT) ||
-                    TARGET_COURT.includes(optText.replace(/\s*(지방법원|지원|법원)\s*$/, ''))) {
-                    sel.selectedIndex = j;
-                    trigger(sel, ['change']);
-                    console.log('[경매자동검색] 법원 선택:', optText);
-                    return true;
-                }
+        /* 정확한 DOM ID 직접 타겟 (확인된 ID) */
+        var sel = document.getElementById('mf_wfm_mainFrame_sbx_dspslRsltSrchCortOfc');
+
+        /* fallback: title 속성으로 찾기 */
+        if (!sel) sel = document.querySelector('select[title="법원 선택"]');
+
+        /* fallback: 전체 select 순회 */
+        if (!sel) {
+            var all = document.querySelectorAll('select.w2selectbox_select, select');
+            for (var i = 0; i < all.length; i++) {
+                if (all[i].options.length > 3) { sel = all[i]; break; }
             }
         }
 
-        /* 2) WebSquare API 시도 (콤보박스 ID 후보) */
-        var ws = window.websquare || window.w2 || null;
-        if (ws && ws.getComponentById) {
-            var courtIds = [
-                'sel_courtNm', 'curt_cd', 'courtNm', 'courtCode',
-                'court_cd', 'cbo_court', 'sel_court', 'courtCd',
-                'selCourtNm', 'selCourt'
-            ];
-            for (var k = 0; k < courtIds.length; k++) {
-                try {
-                    var comp = ws.getComponentById(courtIds[k]);
-                    if (comp && comp.setValue) {
-                        comp.setValue(TARGET_COURT);
-                        console.log('[경매자동검색] WebSquare 법원 입력:', courtIds[k]);
-                        return true;
-                    }
-                } catch (e) { /* 없는 ID면 무시 */ }
-            }
+        if (!sel) return false;
+
+        /* option text 매칭 (완전일치 → 포함 → 약칭 포함 순) */
+        var matched = -1;
+        for (var j = 0; j < sel.options.length; j++) {
+            var txt = sel.options[j].text.trim();
+            if (txt === TARGET_COURT)                          { matched = j; break; }
+            if (txt.includes(TARGET_COURT))                   { matched = j; break; }
+            var short = TARGET_COURT.replace(/\s*(지방법원|지원|법원)\s*$/, '');
+            if (txt.includes(short) && short.length > 1)      { matched = j; }
         }
 
-        /* 법원 선택 실패해도 사건번호 입력은 계속 진행 */
+        if (matched >= 0) {
+            sel.selectedIndex = matched;
+            trigger(sel, ['change']);
+            console.log('[경매자동검색] 법원 선택:', sel.options[matched].text);
+            return true;
+        }
+
+        console.warn('[경매자동검색] 법원 매칭 실패:', TARGET_COURT);
         return false;
     }
 
-    /* ── 사건번호 입력 ──────────────────────────────────────────── */
+    /* ────────────────────────────────────────────────────────────────
+       2. 사건번호 입력
+    ──────────────────────────────────────────────────────────────── */
     function fillCaseNo() {
-        /* 1) 속성/플레이스홀더/ID로 input 찾기 */
-        var inputs = document.querySelectorAll('input[type="text"], input:not([type])');
-        var found  = null;
+        var found = null;
 
-        inputs.forEach(function (inp) {
-            if (found) return;
-            var ph = (inp.placeholder || '').toLowerCase();
-            var id = (inp.id   || '').toLowerCase();
-            var nm = (inp.name || '').toLowerCase();
-            if (ph.includes('사건') || ph.includes('case') ||
-                id.includes('case') || id.includes('caseNo') || id.includes('사건') ||
-                nm.includes('case') || nm.includes('사건')) {
-                found = inp;
-            }
-        });
-
-        /* 2) 라벨 텍스트로 연결된 input 찾기 */
-        if (!found) {
-            var labels = document.querySelectorAll('label, th, td, span, div');
-            labels.forEach(function (lbl) {
-                if (found) return;
-                if (lbl.textContent.trim() === '사건번호') {
-                    /* label for= 연결 */
-                    if (lbl.htmlFor) {
-                        found = document.getElementById(lbl.htmlFor);
-                        return;
-                    }
-                    /* 인접 sibling/cell input */
-                    var sib = lbl.nextElementSibling;
-                    if (sib && sib.tagName === 'INPUT') { found = sib; return; }
-                    var cell = lbl.closest('td, th');
-                    if (cell) {
-                        var next = cell.nextElementSibling;
-                        if (next) found = next.querySelector('input');
-                    }
-                }
-            });
+        /* ① 패턴 기반 ID 후보 (법원 select ID 네이밍 패턴 적용) */
+        var candidateIds = [
+            'mf_wfm_mainFrame_inp_dspslRsltSrchCaseNo',   // 가장 유력
+            'mf_wfm_mainFrame_inp_dspslRsltSrchCasNo',
+            'mf_wfm_mainFrame_edt_dspslRsltSrchCaseNo',
+            'mf_wfm_mainFrame_txt_dspslRsltSrchCaseNo',
+            'mf_wfm_mainFrame_inp_dspslRsltSrchCaseNum',
+        ];
+        for (var i = 0; i < candidateIds.length; i++) {
+            var el = document.getElementById(candidateIds[i]);
+            if (el) { found = el; break; }
         }
 
-        /* 3) 마지막 수단 – 첫 번째 visible/enabled text input */
+        /* ② id/name/placeholder에 'case' 또는 '사건' 포함 */
         if (!found) {
-            inputs.forEach(function (inp) {
+            document.querySelectorAll('input[type="text"], input:not([type])').forEach(function (inp) {
                 if (found) return;
-                if (inp.offsetParent !== null && !inp.disabled && !inp.readOnly) {
+                var ph = (inp.placeholder || '').toLowerCase();
+                var id = (inp.id   || '').toLowerCase();
+                var nm = (inp.name || '').toLowerCase();
+                if (ph.includes('사건') || ph.includes('case') ||
+                    id.includes('caseno') || id.includes('casenum') || id.includes('사건') ||
+                    nm.includes('caseno') || nm.includes('사건')) {
                     found = inp;
                 }
             });
         }
 
-        /* 4) WebSquare API 시도 */
-        var ws = window.websquare || window.w2 || null;
-        if (ws && ws.getComponentById) {
-            var caseIds = [
-                'inp_caseNo', 'case_no', 'caseNo', 'inp_case',
-                'caseNum', 'txt_caseNo', 'inputCaseNo', 'caseNumber'
-            ];
-            caseIds.forEach(function (cid) {
-                try {
-                    var comp = ws.getComponentById(cid);
-                    if (comp && comp.setValue) {
-                        comp.setValue(TARGET_CASE);
-                        console.log('[경매자동검색] WebSquare 사건번호 입력:', cid);
-                        found = true;   // 플래그 세팅
+        /* ③ 라벨 텍스트 '사건번호' 인접 input */
+        if (!found) {
+            document.querySelectorAll('label, th, td, span, div').forEach(function (lbl) {
+                if (found) return;
+                if (lbl.textContent.trim() === '사건번호') {
+                    if (lbl.htmlFor) { found = document.getElementById(lbl.htmlFor); return; }
+                    var sib = lbl.nextElementSibling;
+                    if (sib && sib.tagName === 'INPUT') { found = sib; return; }
+                    var cell = lbl.closest('td, th');
+                    if (cell && cell.nextElementSibling) {
+                        found = cell.nextElementSibling.querySelector('input');
                     }
-                } catch (e) { }
+                }
             });
         }
 
-        if (found && found !== true) {
+        /* ④ 마지막 수단: 첫 번째 visible·enabled text input */
+        if (!found) {
+            document.querySelectorAll('input[type="text"], input:not([type])').forEach(function (inp) {
+                if (found) return;
+                if (inp.offsetParent !== null && !inp.disabled && !inp.readOnly) found = inp;
+            });
+        }
+
+        if (found) {
             found.value = TARGET_CASE;
             trigger(found, ['input', 'change', 'blur']);
             found.focus();
-            console.log('[경매자동검색] 사건번호 입력 완료');
+            console.log('[경매자동검색] 사건번호 입력:', found.id || '(id 없음)');
             return true;
         }
+
+        console.warn('[경매자동검색] 사건번호 input 못 찾음');
         return false;
     }
 
-    /* ── 검색 버튼 클릭 ─────────────────────────────────────────── */
+    /* ────────────────────────────────────────────────────────────────
+       3. 검색 버튼 클릭
+    ──────────────────────────────────────────────────────────────── */
     function clickSearch() {
         var btn = null;
 
-        /* a) 텍스트/value가 "검색" or "조회" 인 버튼 */
-        document.querySelectorAll('button, input[type="button"], input[type="submit"]').forEach(function (el) {
-            if (btn) return;
-            var txt = (el.textContent || el.value || '').trim();
-            if (txt === '검색' || txt === '조회' || txt === '검  색') btn = el;
-        });
-
-        /* b) 이미지 버튼 alt="검색" */
-        if (!btn) {
-            var imgs = document.querySelectorAll('img[alt="검색"], img[alt="조회"], img[title="검색"]');
-            if (imgs.length > 0) btn = imgs[0].closest('button, a') || imgs[0].parentElement;
+        /* ① 패턴 기반 ID 후보 */
+        var btnIds = [
+            'mf_wfm_mainFrame_btn_dspslRsltSrch',
+            'mf_wfm_mainFrame_btn_dspslRsltSrchGo',
+            'mf_wfm_mainFrame_btn_dspslRsltInqr',
+            'mf_wfm_mainFrame_btn_srch',
+            'mf_wfm_mainFrame_btnSearch',
+        ];
+        for (var i = 0; i < btnIds.length; i++) {
+            var el = document.getElementById(btnIds[i]);
+            if (el) { btn = el; break; }
         }
 
-        /* c) WebSquare 버튼 ID 후보 */
+        /* ② 텍스트가 "검색" or "조회"인 버튼 */
         if (!btn) {
-            var ws = window.websquare || window.w2 || null;
-            var btnIds = ['btn_search', 'btnSearch', 'btn_inq', 'searchBtn', 'btn_srch'];
-            if (ws && ws.getComponentById) {
-                btnIds.forEach(function (bid) {
-                    if (btn) return;
-                    try {
-                        var comp = ws.getComponentById(bid);
-                        if (comp && comp.trigger) { comp.trigger('click'); btn = true; }
-                        else if (comp && comp.click) { comp.click(); btn = true; }
-                    } catch (e) { }
-                });
-            }
+            document.querySelectorAll('button, input[type="button"], input[type="submit"]').forEach(function (el) {
+                if (btn) return;
+                var txt = (el.textContent || el.value || '').trim();
+                if (txt === '검색' || txt === '조회' || txt === '검  색') btn = el;
+            });
         }
 
-        /* d) Enter 키 */
+        /* ③ 이미지 버튼 alt/title */
         if (!btn) {
-            var inputs = document.querySelectorAll('input[type="text"]');
-            inputs.forEach(function (inp) {
+            var img = document.querySelector('img[alt="검색"], img[alt="조회"], img[title="검색"]');
+            if (img) btn = img.closest('button, a') || img.parentElement;
+        }
+
+        /* ④ Enter 키 폴백 */
+        if (!btn) {
+            document.querySelectorAll('input[type="text"]').forEach(function (inp) {
                 if (btn) return;
                 if (inp.value === TARGET_CASE) {
-                    inp.dispatchEvent(new KeyboardEvent('keydown', {
-                        key: 'Enter', keyCode: 13, bubbles: true
-                    }));
+                    inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
                     btn = true;
                 }
             });
@@ -212,28 +198,29 @@
 
         if (btn && btn !== true) {
             btn.click();
-            console.log('[경매자동검색] 검색 버튼 클릭');
+            console.log('[경매자동검색] 검색 버튼 클릭:', btn.id || btn.textContent);
         }
     }
 
-    /* ── 메인 실행 루프 ─────────────────────────────────────────── */
-    var MAX_WAIT_MS = 25000;
-    var startAt    = Date.now();
+    /* ────────────────────────────────────────────────────────────────
+       메인 루프 – WebSquare 초기화 대기 후 실행
+    ──────────────────────────────────────────────────────────────── */
+    var MAX_WAIT_MS  = 25000;
+    var startAt      = Date.now();
     var caseInputted = false;
 
     function run() {
         if (Date.now() - startAt > MAX_WAIT_MS) {
-            alert(
-                '[법원경매 자동검색] 페이지 로딩 시간 초과.\n' +
-                '아래 사건번호를 수동으로 입력해주세요:\n\n' +
-                TARGET_CASE
-            );
+            alert('[법원경매 자동검색] 시간 초과.\n수동으로 입력해주세요: ' + TARGET_CASE);
             return;
         }
 
-        /* 폼 요소가 아직 없으면 대기 */
-        var hasForm = document.querySelectorAll('select, input[type="text"], input:not([type])').length > 0;
-        if (!hasForm) {
+        /* 법원 select가 렌더링될 때까지 대기 */
+        var courtSel = document.getElementById('mf_wfm_mainFrame_sbx_dspslRsltSrchCortOfc')
+                    || document.querySelector('select[title="법원 선택"]')
+                    || document.querySelector('select.w2selectbox_select');
+
+        if (!courtSel || courtSel.options.length < 2) {
             setTimeout(run, 400);
             return;
         }
@@ -244,15 +231,12 @@
         }
 
         if (caseInputted) {
-            setTimeout(clickSearch, 700);   // 입력 후 0.7초 뒤 검색 클릭
+            setTimeout(clickSearch, 700);
         } else {
             setTimeout(run, 500);
         }
     }
 
-    /* 페이지 완전 로드 후 1.5초 뒤 시작 (WebSquare 초기화 대기) */
-    window.addEventListener('load', function () {
-        setTimeout(run, 1500);
-    });
+    window.addEventListener('load', function () { setTimeout(run, 1500); });
 
 })();
