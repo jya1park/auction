@@ -17,7 +17,7 @@ KAKAO_APP_KEY = "614ddc420a052c47f1b0a7eb2169d862"
 # 주소 컬럼 후보 (우선순위 순)
 ADDRESS_COLUMNS = ["물건주소", "소재지", "주소", "물건소재지"]
 
-# HTML에 포함할 데이터 컬럼 후보 (있는 것만)
+# HTML에 포함할 데이터 컬럼 후보 (경매목록)
 DATA_COLUMNS = [
     "사건번호", "법원", "물건번호",
     "물건주소", "소재지", "주소", "물건소재지",
@@ -25,6 +25,16 @@ DATA_COLUMNS = [
     "최저입찰가_표시", "최저입찰가", "최저매각가",
     "입찰기일", "매각기일", "진행상태", "상태",
     "유찰횟수", "입찰방법",
+]
+
+# HTML에 포함할 데이터 컬럼 후보 (매각결과)
+RESULT_DATA_COLUMNS = [
+    "사건번호", "법원", "물건번호",
+    "소재지", "물건주소", "주소",
+    "용도",
+    "감정평가액", "최저매각가격", "매각금액",
+    "매각일자", "매각기일",
+    "입찰자수",
 ]
 
 # 기본 중심 좌표 (수원시)
@@ -85,6 +95,26 @@ SAMPLE_DATA = [
         "진행상태": "진행중",
     },
 ]
+
+
+def _read_csv(filepath: str) -> Tuple[List[str], List[Dict]]:
+    """CSV 파일을 읽어 (headers, data) 반환합니다. 인코딩 자동 감지."""
+    import csv as csv_module
+    if not os.path.exists(filepath):
+        return [], []
+    for enc in ["utf-8-sig", "utf-8", "cp949"]:
+        try:
+            with open(filepath, newline="", encoding=enc) as f:
+                reader = csv_module.DictReader(f)
+                data = list(reader)
+                headers = list(reader.fieldnames or [])
+            return headers, data
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+        except Exception as e:
+            print(f"[MapGen] CSV 읽기 오류: {e}")
+            return [], []
+    return [], []
 
 
 def _get_output_dir() -> str:
@@ -163,8 +193,45 @@ def _build_items_json(data: List[Dict], headers: List[str], addr_col: str) -> st
     return json.dumps(items, ensure_ascii=False)
 
 
-def _build_html(items_json: str, total: int, title_suffix: str = "") -> str:
+def _clean_address(addr: str) -> str:
+    """
+    주소에서 동·호수, 괄호, 대괄호 내용을 제거하여 지오코딩용 순수 도로명/지번 주소를 반환합니다.
+    예) '경기 수원시 팔달구 중동 1234 [현대아파트 101동 301호]' → '경기 수원시 팔달구 중동 1234'
+    """
+    import re
+    addr = re.sub(r'\s*[\[\(〔（【][^\]\)\）】〕]*[\]\)）】〕]', '', addr)
+    addr = re.sub(r'\s*\[.*', '', addr, flags=re.DOTALL)
+    addr = re.sub(r'\s*\(.*', '', addr, flags=re.DOTALL)
+    return addr.strip()
+
+
+def _build_result_items_json(data: List[Dict], headers: List[str], addr_col: str) -> str:
+    """매각결과 데이터를 HTML 인라인 JS 배열 문자열로 반환합니다."""
+    import re
+    all_keys = set(headers) if headers else set()
+    items = []
+    for record in data:
+        raw_addr = str(record.get(addr_col, "") or "").strip()
+        if not raw_addr or raw_addr == "None":
+            continue
+        address = _clean_address(raw_addr)
+        if not address:
+            continue
+        item: Dict = {"addr": address}
+        record_keys = all_keys or set(record.keys())
+        for col in RESULT_DATA_COLUMNS:
+            if col in record_keys and record.get(col) is not None:
+                val = str(record[col]).strip()
+                if val and val != "None":
+                    item[col] = val
+        items.append(item)
+    return json.dumps(items, ensure_ascii=False)
+
+
+def _build_html(items_json: str, total: int, title_suffix: str = "",
+                result_items_json: str = "[]", result_total: int = 0) -> str:
     title = f"경매 물건 지도{title_suffix}"
+    panel_result = f" | <span style='color:#1565C0'>●</span> 매각결과 {result_total}건" if result_total > 0 else ""
 
     return f"""<!DOCTYPE html>
 <html lang="ko">
@@ -197,6 +264,17 @@ def _build_html(items_json: str, total: int, title_suffix: str = "") -> str:
       max-width: 300px;
       position: relative;
     }}
+    .iw-badge {{
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: bold;
+      color: white;
+      margin-bottom: 6px;
+    }}
+    .iw-badge-list   {{ background: #c0392b; }}
+    .iw-badge-result {{ background: #1565C0; }}
     .iw-close {{
       position: absolute;
       top: 6px;
@@ -229,11 +307,13 @@ def _build_html(items_json: str, total: int, title_suffix: str = "") -> str:
 <body>
   <div id="map"></div>
   <div id="panel">
-    총 {total}건 | 지도 표시: <span id="mapped-count">0</span>건
+    <span style="color:#c0392b">●</span> 경매목록 {total}건{panel_result}
+    &nbsp;|&nbsp; 지도: <span id="mapped-count">0</span>건
   </div>
 
   <script>
-    var ITEMS = {items_json};
+    var ITEMS        = {items_json};
+    var RESULT_ITEMS = {result_items_json};
   </script>
   <script src="//dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_APP_KEY}&libraries=services,clusterer"></script>
   <script>
@@ -247,45 +327,85 @@ def _build_html(items_json: str, total: int, title_suffix: str = "") -> str:
         map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
         map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
 
-        var geocoder  = new kakao.maps.services.Geocoder();
-        var clusterer = new kakao.maps.MarkerClusterer({{
-          map: map,
-          averageCenter: true,
-          minLevel: 4
+        var geocoder = new kakao.maps.services.Geocoder();
+
+        // 클러스터러 (경매목록 - 빨간)
+        var clustererList = new kakao.maps.MarkerClusterer({{
+          map: map, averageCenter: true, minLevel: 4
+        }});
+        // 클러스터러 (매각결과 - 파란)
+        var clustererResult = new kakao.maps.MarkerClusterer({{
+          map: map, averageCenter: true, minLevel: 4
         }});
 
-        var currentIW = null;
-        var mappedCount = 0;
-        var bounds = new kakao.maps.LatLngBounds();
-        var markerList = [];
+        // 빨간색 마커 이미지 (경매목록)
+        var redSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" width="24" height="36">'
+          + '<path fill="#E53935" stroke="#B71C1C" stroke-width="1.5" d="M12 1C6.477 1 2 5.477 2 11c0 3.85 2.088 7.202 5.19 9.015L12 35l4.81-14.985C19.912 18.202 22 14.85 22 11c0-5.523-4.477-10-10-10z"/>'
+          + '<circle fill="white" cx="12" cy="11" r="4.5"/>'
+          + '</svg>';
+        var redMarkerImage = new kakao.maps.MarkerImage(
+          'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(redSvg),
+          new kakao.maps.Size(24, 36),
+          {{offset: new kakao.maps.Point(12, 36)}}
+        );
 
-        // InfoWindow 닫기 (전역 함수 - 인라인 onclick에서 호출)
+        // 파란색 마커 이미지 (매각결과)
+        var blueSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" width="24" height="36">'
+          + '<path fill="#1976D2" stroke="#0D47A1" stroke-width="1.5" d="M12 1C6.477 1 2 5.477 2 11c0 3.85 2.088 7.202 5.19 9.015L12 35l4.81-14.985C19.912 18.202 22 14.85 22 11c0-5.523-4.477-10-10-10z"/>'
+          + '<circle fill="white" cx="12" cy="11" r="4.5"/>'
+          + '</svg>';
+        var blueMarkerImage = new kakao.maps.MarkerImage(
+          'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(blueSvg),
+          new kakao.maps.Size(24, 36),
+          {{offset: new kakao.maps.Point(12, 36)}}
+        );
+
+        var currentIW  = null;
+        var mappedCount = 0;
+        var bounds     = new kakao.maps.LatLngBounds();
+        var listMarkers   = [];
+        var resultMarkers = [];
+
         window.closeIW = function() {{
           if (currentIW) {{ currentIW.close(); currentIW = null; }}
         }};
 
-        function buildContent(item) {{
-          var LABELS = {{
+        function buildContent(item, type) {{
+          var isResult = (type === 'result');
+          var LABELS = isResult ? {{
             '사건번호':      '사건번호',
             '법원':          '법원',
             '물건번호':      '물건번호',
-            '물건주소':      '주소',
             '소재지':        '주소',
+            '물건주소':      '주소',
             '주소':          '주소',
-            '물건소재지':    '주소',
             '용도':          '용도',
             '감정평가액':    '감정가',
-            '감정가':        '감정가',
+            '최저매각가격':  '최저매각가',
+            '매각금액':      '매각금액',
+            '매각일자':      '매각일자',
+            '매각기일':      '매각일자',
+            '입찰자수':      '입찰자수',
+          }} : {{
+            '사건번호':        '사건번호',
+            '법원':            '법원',
+            '물건번호':        '물건번호',
+            '물건주소':        '주소',
+            '소재지':          '주소',
+            '주소':            '주소',
+            '물건소재지':      '주소',
+            '용도':            '용도',
+            '감정평가액':      '감정가',
+            '감정가':          '감정가',
             '최저입찰가_표시': '최저매각가',
-            '최저입찰가':    '최저매각가',
-            '최저매각가':    '최저매각가',
-            '입찰기일':      '매각기일',
-            '매각기일':      '매각기일',
-            '진행상태':      '상태',
-            '상태':          '상태',
-            '유찰횟수':      '유찰횟수',
+            '최저입찰가':      '최저매각가',
+            '최저매각가':      '최저매각가',
+            '입찰기일':        '매각기일',
+            '매각기일':        '매각기일',
+            '진행상태':        '상태',
+            '상태':            '상태',
+            '유찰횟수':        '유찰횟수',
           }};
-          // 중복 레이블 제거
           var seen = {{}};
           var rows = '';
           Object.keys(LABELS).forEach(function(key) {{
@@ -295,49 +415,56 @@ def _build_html(items_json: str, total: int, title_suffix: str = "") -> str:
               rows += '<tr><th>' + label + '</th><td>' + item[key] + '</td></tr>';
             }}
           }});
+          var badgeClass = isResult ? 'iw-badge-result' : 'iw-badge-list';
+          var badgeText  = isResult ? '매각결과' : '경매목록';
           return '<div class="iw-wrap">'
                + '<button class="iw-close" onclick="closeIW()">✕</button>'
+               + '<span class="iw-badge ' + badgeClass + '">' + badgeText + '</span>'
                + '<table class="iw-table">' + rows + '</table>'
                + '</div>';
         }}
 
-        function addMarker(item, lat, lng) {{
+        function addMarker(item, lat, lng, type) {{
           var pos    = new kakao.maps.LatLng(lat, lng);
-          var marker = new kakao.maps.Marker({{ position: pos }});
+          var markerOpts = {{ position: pos }};
+          markerOpts.image = (type === 'result') ? blueMarkerImage : redMarkerImage;
+          var marker = new kakao.maps.Marker(markerOpts);
           var iw     = new kakao.maps.InfoWindow({{
-            content: buildContent(item),
+            content: buildContent(item, type),
             removable: false
           }});
-
           kakao.maps.event.addListener(marker, 'click', function() {{
             closeIW();
             iw.open(map, marker);
             currentIW = iw;
           }});
-
-          markerList.push(marker);
+          if (type === 'result') {{ resultMarkers.push(marker); }}
+          else                   {{ listMarkers.push(marker); }}
           bounds.extend(pos);
           mappedCount++;
           document.getElementById('mapped-count').textContent = mappedCount;
         }}
 
-        // 순차 geocoding (카카오 API 부하 분산)
+        // 경매목록(빨간)과 매각결과(파란)를 순차 처리 (300ms 간격)
+        var queue = [];
+        ITEMS.forEach(function(item)        {{ queue.push({{data: item, type: 'list'}}); }});
+        RESULT_ITEMS.forEach(function(item) {{ queue.push({{data: item, type: 'result'}}); }});
+
         var idx = 0;
         function processNext() {{
-          if (idx >= ITEMS.length) {{
-            // 모두 완료 후 bounds 조정
-            clusterer.addMarkers(markerList);
-            if (markerList.length > 0) {{
+          if (idx >= queue.length) {{
+            clustererList.addMarkers(listMarkers);
+            clustererResult.addMarkers(resultMarkers);
+            if (listMarkers.length + resultMarkers.length > 0) {{
               map.setBounds(bounds);
             }}
             return;
           }}
-          var item = ITEMS[idx++];
-          geocoder.addressSearch(item.addr, function(result, status) {{
+          var entry = queue[idx++];
+          geocoder.addressSearch(entry.data.addr, function(result, status) {{
             if (status === kakao.maps.services.Status.OK) {{
-              addMarker(item, result[0].y, result[0].x);
+              addMarker(entry.data, result[0].y, result[0].x, entry.type);
             }}
-            // 다음 아이템 처리 (300ms 간격으로 카카오 API 부하 분산)
             setTimeout(processNext, 300);
           }});
         }}
@@ -398,7 +525,21 @@ def generate_map(
 
         print(f"[MapGen] 주소 컬럼: '{addr_col}', {len(data)}건 데이터 삽입 (geocoding은 브라우저에서 처리)")
         items_json = _build_items_json(data, headers, addr_col)
-        html_content = _build_html(items_json, len(data))
+
+        # 매각결과 CSV 로드
+        result_csv_path = os.path.join(_get_output_dir(), "courtauction_result.csv")
+        result_headers, result_data_rows = _read_csv(result_csv_path)
+        result_items_json = "[]"
+        result_total = 0
+        if result_data_rows:
+            result_addr_col = _find_address_column(result_headers) or "소재지"
+            result_items_json = _build_result_items_json(result_data_rows, result_headers, result_addr_col)
+            result_total = len(result_data_rows)
+            print(f"[MapGen] 매각결과 {result_total}건 추가 (파란색 마커)")
+
+        html_content = _build_html(items_json, len(data),
+                                   result_items_json=result_items_json,
+                                   result_total=result_total)
         label = ""
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
