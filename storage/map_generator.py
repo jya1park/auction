@@ -535,10 +535,10 @@ def _build_html(items_json: str, total: int, title_suffix: str = "",
               var valClass = MONEY_LABELS.has(label)
                 ? (label === '매각금액' ? ' class="iw-money-sale"' : ' class="iw-money"')
                 : '';
-              /* 사건번호는 클릭 가능하게 */
+              /* 사건번호는 클릭 가능하게 (data-case 속성으로 전달 → 이스케이프 불필요) */
               if (key === '사건번호') {{
-                var safeCaseNo = val.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                val = '<span class="iw-case-link" title="클릭하면 법원경매 사이트 검색" onclick="openCase(\'' + safeCaseNo + '\')">' + val + '</span>';
+                var caseAttr = val.replace(/"/g, '&quot;');
+                val = '<span class="iw-case-link" data-case="' + caseAttr + '" title="클릭하면 법원경매 사이트 검색" onclick="openCase(this.dataset.case)">' + val + '</span>';
                 valClass = '';
               }}
               rows += '<tr><th>' + label + '</th><td' + valClass + '>' + val + '</td></tr>';
@@ -565,11 +565,11 @@ def _build_html(items_json: str, total: int, title_suffix: str = "",
         function buildGroupContent(entries, addr) {{
           var shortAddr = addr.length > 28 ? addr.slice(0, 26) + '…' : addr;
           var countText = entries.length > 1 ? entries.length + '건' : '';
-          var safeAddr  = addr.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+          var addrAttr = addr.replace(/"/g, '&quot;');
           var cards = entries.map(function(e) {{ return buildCard(e.item, e.type); }}).join('');
           return '<div class="iw-wrap">'
                + '<div class="iw-header">'
-               +   '<span class="iw-header-addr" title="클릭하면 주소 복사&#10;' + addr + '" onclick="copyAddr(\'' + safeAddr + '\')">'
+               +   '<span class="iw-header-addr" data-addr="' + addrAttr + '" title="클릭하면 주소 복사&#10;' + addrAttr + '" onclick="copyAddr(this.dataset.addr)">'
                +     shortAddr + '<span class="iw-copy-icon">⎘</span>'
                +   '</span>'
                +   (countText ? '<span class="iw-header-count">' + countText + '</span>' : '')
