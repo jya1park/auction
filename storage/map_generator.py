@@ -257,59 +257,106 @@ def _build_html(items_json: str, total: int, title_suffix: str = "",
       font-weight: bold;
       color: #1F4E79;
     }}
+    /* ── 팝업 전체 래퍼 ── */
     .iw-wrap {{
-      padding: 10px 30px 10px 12px;
       font-family: 'Malgun Gothic', sans-serif;
       font-size: 13px;
-      min-width: 200px;
-      max-width: 300px;
+      width: 290px;
       position: relative;
+      background: #fff;
+      border-radius: 8px;
+      overflow: hidden;
     }}
+    /* ── 헤더 (주소 + 총 건수 + 닫기) ── */
+    .iw-header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #f0f4fa;
+      padding: 7px 10px;
+      border-bottom: 1px solid #dde3ee;
+    }}
+    .iw-header-addr {{
+      font-size: 11px;
+      color: #444;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-right: 8px;
+    }}
+    .iw-header-count {{
+      font-size: 11px;
+      font-weight: bold;
+      color: #1F4E79;
+      white-space: nowrap;
+    }}
+    .iw-close {{
+      background: none;
+      border: none;
+      font-size: 16px;
+      cursor: pointer;
+      color: #999;
+      line-height: 1;
+      padding: 0 0 0 8px;
+      flex-shrink: 0;
+    }}
+    .iw-close:hover {{ color: #333; }}
+    /* ── 스크롤 영역 ── */
+    .iw-scroll {{
+      max-height: 300px;
+      overflow-y: auto;
+      padding: 0;
+    }}
+    .iw-scroll::-webkit-scrollbar {{ width: 4px; }}
+    .iw-scroll::-webkit-scrollbar-thumb {{ background: #c5cfe0; border-radius: 2px; }}
+    /* ── 개별 물건 카드 ── */
+    .iw-card {{
+      padding: 9px 12px;
+      border-bottom: 1px solid #eef0f5;
+    }}
+    .iw-card:last-child {{ border-bottom: none; }}
     .iw-badge {{
       display: inline-block;
       padding: 2px 8px;
       border-radius: 10px;
-      font-size: 11px;
+      font-size: 10px;
       font-weight: bold;
       color: white;
       margin-bottom: 6px;
     }}
     .iw-badge-list   {{ background: #c0392b; }}
     .iw-badge-result {{ background: #1565C0; }}
-    .iw-close {{
-      position: absolute;
-      top: 6px;
-      right: 8px;
-      background: none;
-      border: none;
-      font-size: 15px;
-      cursor: pointer;
-      color: #888;
-      line-height: 1;
-      padding: 2px;
-    }}
-    .iw-close:hover {{ color: #333; }}
-    .iw-table {{ border-collapse: collapse; width: 100%; margin-top: 4px; }}
+    /* 매각결과 강조 배지 */
+    .iw-badge-sold   {{ background: #2e7d32; }}
+    .iw-badge-fail   {{ background: #757575; }}
+    .iw-table {{ border-collapse: collapse; width: 100%; }}
     .iw-table th {{
       text-align: left;
-      padding: 2px 10px 2px 0;
-      color: #666;
+      padding: 2px 8px 2px 0;
+      color: #777;
       white-space: nowrap;
       vertical-align: top;
       font-weight: normal;
+      font-size: 12px;
+      width: 72px;
     }}
     .iw-table td {{
       padding: 2px 0;
-      color: #222;
+      color: #111;
+      font-size: 12px;
       word-break: break-all;
     }}
+    /* 금액 강조 */
+    .iw-money {{ font-weight: bold; color: #c0392b; }}
+    .iw-money-sale {{ font-weight: bold; color: #1565C0; }}
   </style>
 </head>
 <body>
   <div id="map"></div>
   <div id="panel">
     <span style="color:#c0392b">●</span> 경매목록 {total}건{panel_result}
-    &nbsp;|&nbsp; 지도: <span id="mapped-count">0</span>건
+    &nbsp;|&nbsp; 지도: <span id="mapped-count">0</span>건 / <span id="addr-count">0</span>개 주소
   </div>
 
   <script>
@@ -330,110 +377,137 @@ def _build_html(items_json: str, total: int, title_suffix: str = "",
 
         var geocoder = new kakao.maps.services.Geocoder();
 
-        // 클러스터러 (경매목록 - 빨간)
-        var clustererList = new kakao.maps.MarkerClusterer({{
-          map: map, averageCenter: true, minLevel: 4
-        }});
-        // 클러스터러 (매각결과 - 파란)
-        var clustererResult = new kakao.maps.MarkerClusterer({{
-          map: map, averageCenter: true, minLevel: 4
+        // 클러스터러 (전체 마커용)
+        var clusterer = new kakao.maps.MarkerClusterer({{
+          map: map, averageCenter: true, minLevel: 4,
+          disableClickZoom: false
         }});
 
-        // 빨간색 마커 이미지 (경매목록)
+        // 빨간색 마커 (경매목록만)
         var redSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" width="24" height="36">'
           + '<path fill="#E53935" stroke="#B71C1C" stroke-width="1.5" d="M12 1C6.477 1 2 5.477 2 11c0 3.85 2.088 7.202 5.19 9.015L12 35l4.81-14.985C19.912 18.202 22 14.85 22 11c0-5.523-4.477-10-10-10z"/>'
           + '<circle fill="white" cx="12" cy="11" r="4.5"/>'
           + '</svg>';
-        var redMarkerImage = new kakao.maps.MarkerImage(
-          'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(redSvg),
-          new kakao.maps.Size(24, 36),
-          {{offset: new kakao.maps.Point(12, 36)}}
-        );
-
-        // 파란색 마커 이미지 (매각결과)
+        // 파란색 마커 (매각결과만)
         var blueSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" width="24" height="36">'
           + '<path fill="#1976D2" stroke="#0D47A1" stroke-width="1.5" d="M12 1C6.477 1 2 5.477 2 11c0 3.85 2.088 7.202 5.19 9.015L12 35l4.81-14.985C19.912 18.202 22 14.85 22 11c0-5.523-4.477-10-10-10z"/>'
           + '<circle fill="white" cx="12" cy="11" r="4.5"/>'
           + '</svg>';
-        var blueMarkerImage = new kakao.maps.MarkerImage(
-          'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(blueSvg),
-          new kakao.maps.Size(24, 36),
-          {{offset: new kakao.maps.Point(12, 36)}}
-        );
+        // 보라색 마커 (경매목록 + 매각결과 혼합)
+        var purpleSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" width="24" height="36">'
+          + '<path fill="#7B1FA2" stroke="#4A148C" stroke-width="1.5" d="M12 1C6.477 1 2 5.477 2 11c0 3.85 2.088 7.202 5.19 9.015L12 35l4.81-14.985C19.912 18.202 22 14.85 22 11c0-5.523-4.477-10-10-10z"/>'
+          + '<circle fill="white" cx="12" cy="11" r="4.5"/>'
+          + '</svg>';
 
-        var currentIW  = null;
-        var mappedCount = 0;
-        var bounds     = new kakao.maps.LatLngBounds();
-        var listMarkers   = [];
-        var resultMarkers = [];
+        function makeMarkerImage(svg) {{
+          return new kakao.maps.MarkerImage(
+            'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg),
+            new kakao.maps.Size(24, 36),
+            {{offset: new kakao.maps.Point(12, 36)}}
+          );
+        }}
+        var imgRed    = makeMarkerImage(redSvg);
+        var imgBlue   = makeMarkerImage(blueSvg);
+        var imgPurple = makeMarkerImage(purpleSvg);
+
+        var currentIW   = null;
+        var mappedItems = 0;
+        var addrCount   = 0;
+        var bounds      = new kakao.maps.LatLngBounds();
+        var allMarkers  = [];
 
         window.closeIW = function() {{
           if (currentIW) {{ currentIW.close(); currentIW = null; }}
         }};
 
-        function buildContent(item, type) {{
-          var isResult = (type === 'result');
-          var LABELS = isResult ? {{
-            '사건번호':       '사건번호',
-            '법원':           '법원',
-            '물건번호':       '물건번호',
-            '소재지':         '주소',
-            '물건주소':       '주소',
-            '주소':           '주소',
-            '소재지 및 내역': '주소',
-            '용도':           '용도',
-            '매각결과':       '매각결과',
-            '감정평가액':     '감정가',
-            '최저매각가격':   '최저매각가',
-            '매각금액':       '매각금액',
-            '매각일자':       '매각일자',
-            '매각기일':       '매각일자',
-            '입찰자수':       '입찰자수',
-          }} : {{
-            '사건번호':        '사건번호',
-            '법원':            '법원',
-            '물건번호':        '물건번호',
-            '물건주소':        '주소',
-            '소재지':          '주소',
-            '주소':            '주소',
-            '물건소재지':      '주소',
-            '용도':            '용도',
-            '감정평가액':      '감정가',
-            '감정가':          '감정가',
-            '최저입찰가_표시': '최저매각가',
-            '최저입찰가':      '최저매각가',
-            '최저매각가':      '최저매각가',
-            '입찰기일':        '매각기일',
-            '매각기일':        '매각기일',
-            '진행상태':        '상태',
-            '상태':            '상태',
-            '유찰횟수':        '유찰횟수',
-          }};
+        /* ── 라벨 정의 ── */
+        var LABELS_RESULT = {{
+          '사건번호': '사건번호', '법원': '법원', '물건번호': '물건번호',
+          '소재지': '주소', '물건주소': '주소', '주소': '주소', '소재지 및 내역': '주소',
+          '용도': '용도', '매각결과': '매각결과', '감정평가액': '감정가',
+          '최저매각가격': '최저매각가', '매각금액': '매각금액',
+          '매각일자': '매각일자', '매각기일': '매각일자', '입찰자수': '입찰자수'
+        }};
+        var LABELS_LIST = {{
+          '사건번호': '사건번호', '법원': '법원', '물건번호': '물건번호',
+          '물건주소': '주소', '소재지': '주소', '주소': '주소', '물건소재지': '주소',
+          '용도': '용도', '감정평가액': '감정가', '감정가': '감정가',
+          '최저입찰가_표시': '최저매각가', '최저입찰가': '최저매각가', '최저매각가': '최저매각가',
+          '입찰기일': '매각기일', '매각기일': '매각기일',
+          '진행상태': '상태', '상태': '상태', '유찰횟수': '유찰횟수'
+        }};
+        var MONEY_LABELS = new Set(['감정가', '최저매각가', '매각금액']);
+
+        /* ── 카드 한 장 HTML 생성 ── */
+        function buildCard(item, type) {{
+          var isResult  = (type === 'result');
+          var LABELS    = isResult ? LABELS_RESULT : LABELS_LIST;
           var seen = {{}};
           var rows = '';
           Object.keys(LABELS).forEach(function(key) {{
             var label = LABELS[key];
             if (item[key] && !seen[label]) {{
               seen[label] = true;
-              rows += '<tr><th>' + label + '</th><td>' + item[key] + '</td></tr>';
+              var valClass = MONEY_LABELS.has(label)
+                ? (label === '매각금액' ? ' class="iw-money-sale"' : ' class="iw-money"')
+                : '';
+              rows += '<tr><th>' + label + '</th><td' + valClass + '>' + item[key] + '</td></tr>';
             }}
           }});
-          var badgeClass = isResult ? 'iw-badge-result' : 'iw-badge-list';
-          var badgeText  = isResult ? '매각결과' : '경매목록';
-          return '<div class="iw-wrap">'
-               + '<button class="iw-close" onclick="closeIW()">✕</button>'
+          /* 배지 결정 */
+          var badgeClass, badgeText;
+          if (!isResult) {{
+            badgeClass = 'iw-badge-list';  badgeText = '경매목록';
+          }} else if (item['매각결과'] === '매각') {{
+            badgeClass = 'iw-badge-sold';  badgeText = '매각';
+          }} else if (item['매각결과'] === '유찰') {{
+            badgeClass = 'iw-badge-fail';  badgeText = '유찰';
+          }} else {{
+            badgeClass = 'iw-badge-result'; badgeText = '매각결과';
+          }}
+          return '<div class="iw-card">'
                + '<span class="iw-badge ' + badgeClass + '">' + badgeText + '</span>'
                + '<table class="iw-table">' + rows + '</table>'
                + '</div>';
         }}
 
-        function addMarker(item, lat, lng, type) {{
+        /* ── 그룹 팝업 전체 HTML 생성 ── */
+        function buildGroupContent(entries, addr) {{
+          var shortAddr = addr.length > 30 ? addr.slice(0, 28) + '…' : addr;
+          var countText = entries.length > 1 ? entries.length + '건' : '';
+          var cards = entries.map(function(e) {{ return buildCard(e.item, e.type); }}).join('');
+          return '<div class="iw-wrap">'
+               + '<div class="iw-header">'
+               +   '<span class="iw-header-addr" title="' + addr + '">' + shortAddr + '</span>'
+               +   (countText ? '<span class="iw-header-count">' + countText + '</span>' : '')
+               +   '<button class="iw-close" onclick="closeIW()">✕</button>'
+               + '</div>'
+               + '<div class="iw-scroll">' + cards + '</div>'
+               + '</div>';
+        }}
+
+        /* ── 주소별 그룹화 ── */
+        var addrGroups = {{}};   // addr → [{{item, type}}, ...]
+        function addToGroup(item, type) {{
+          var key = item.addr;
+          if (!addrGroups[key]) addrGroups[key] = [];
+          addrGroups[key].push({{item: item, type: type}});
+        }}
+        ITEMS.forEach(function(item)        {{ addToGroup(item, 'list'); }});
+        RESULT_ITEMS.forEach(function(item) {{ addToGroup(item, 'result'); }});
+
+        /* ── 마커 생성 ── */
+        function addGroupMarker(addr, entries, lat, lng) {{
+          var hasList   = entries.some(function(e) {{ return e.type === 'list'; }});
+          var hasResult = entries.some(function(e) {{ return e.type === 'result'; }});
+          var img = (hasList && hasResult) ? imgPurple
+                  : hasResult              ? imgBlue
+                  :                          imgRed;
+
           var pos    = new kakao.maps.LatLng(lat, lng);
-          var markerOpts = {{ position: pos }};
-          markerOpts.image = (type === 'result') ? blueMarkerImage : redMarkerImage;
-          var marker = new kakao.maps.Marker(markerOpts);
+          var marker = new kakao.maps.Marker({{ position: pos, image: img }});
           var iw     = new kakao.maps.InfoWindow({{
-            content: buildContent(item, type),
+            content: buildGroupContent(entries, addr),
             removable: false
           }});
           kakao.maps.event.addListener(marker, 'click', function() {{
@@ -441,32 +515,30 @@ def _build_html(items_json: str, total: int, title_suffix: str = "",
             iw.open(map, marker);
             currentIW = iw;
           }});
-          if (type === 'result') {{ resultMarkers.push(marker); }}
-          else                   {{ listMarkers.push(marker); }}
+          allMarkers.push(marker);
           bounds.extend(pos);
-          mappedCount++;
-          document.getElementById('mapped-count').textContent = mappedCount;
+
+          mappedItems += entries.length;
+          addrCount++;
+          document.getElementById('mapped-count').textContent = mappedItems;
+          document.getElementById('addr-count').textContent   = addrCount;
         }}
 
-        // 경매목록(빨간)과 매각결과(파란)를 순차 처리 (300ms 간격)
-        var queue = [];
-        ITEMS.forEach(function(item)        {{ queue.push({{data: item, type: 'list'}}); }});
-        RESULT_ITEMS.forEach(function(item) {{ queue.push({{data: item, type: 'result'}}); }});
+        /* ── 순차 지오코딩 (주소 단위, 300ms 간격) ── */
+        var addrQueue = Object.keys(addrGroups);
+        var qIdx = 0;
 
-        var idx = 0;
         function processNext() {{
-          if (idx >= queue.length) {{
-            clustererList.addMarkers(listMarkers);
-            clustererResult.addMarkers(resultMarkers);
-            if (listMarkers.length + resultMarkers.length > 0) {{
-              map.setBounds(bounds);
-            }}
+          if (qIdx >= addrQueue.length) {{
+            clusterer.addMarkers(allMarkers);
+            if (allMarkers.length > 0) map.setBounds(bounds);
             return;
           }}
-          var entry = queue[idx++];
-          geocoder.addressSearch(entry.data.addr, function(result, status) {{
+          var addr    = addrQueue[qIdx++];
+          var entries = addrGroups[addr];
+          geocoder.addressSearch(addr, function(result, status) {{
             if (status === kakao.maps.services.Status.OK) {{
-              addMarker(entry.data, result[0].y, result[0].x, entry.type);
+              addGroupMarker(addr, entries, result[0].y, result[0].x);
             }}
             setTimeout(processNext, 300);
           }});
