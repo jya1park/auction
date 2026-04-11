@@ -21,7 +21,7 @@ from crawler.list_parser import parse_list_page, get_total_count
 from crawler.detail_parser import DetailParser
 from crawler.result_navigator import ResultNavigator
 from crawler.result_parser import parse_result_page, get_total_count as get_result_count
-from storage.exporter import save_csv, save_excel, update_excel, print_summary
+from storage.exporter import save_csv, save_excel, update_excel, print_summary, save_result_csv
 
 
 def parse_args():
@@ -278,7 +278,7 @@ def run_result_mode(driver, args) -> list:
             print(f"[Main] 최대 페이지({max_pages}) 도달")
             break
 
-        has_next = result_nav.go_to_next_page()
+        has_next = result_nav.go_to_next_page(current_page=page)
         if not has_next:
             print("[Main] 매각결과 마지막 페이지")
             break
@@ -409,6 +409,8 @@ def main():
             if data:
                 print_summary(data)
                 csv_path = save_csv(data)
+            if result_data:
+                save_result_csv(result_data)  # 매각결과 CSV (지도 파란 마커용)
             xlsx_path = update_excel(data, result_data)  # 두 시트 누적 업데이트
 
             # 지도 HTML 생성
