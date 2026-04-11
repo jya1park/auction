@@ -415,7 +415,6 @@ def upload_to_github(
     owner: str = "jya1park",
     repo: str = "auction",
     branch: str = "main",
-    remote_dir: str = "storage",
 ) -> bool:
     """GitHub REST API로 파일을 업로드(또는 갱신)합니다."""
     import base64
@@ -423,7 +422,7 @@ def upload_to_github(
     import urllib.error
 
     filename = os.path.basename(filepath)
-    remote_path = f"{remote_dir}/{filename}".lstrip("/") if remote_dir else filename
+    remote_path = f"storage/{filename}"
     api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{remote_path}"
 
     with open(filepath, "rb") as f:
