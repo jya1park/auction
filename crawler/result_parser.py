@@ -4,11 +4,26 @@
 대법원 경매 매각결과 테이블 구조:
 - rowspan/colspan을 사용하는 구조를 정규화하여 파싱합니다.
 - 사건번호 없이 용도/금액만 있는 서브행을 이전 행에 병합합니다.
+
+【테이블 구조 분석】
+메인행: 사건번호 | 물건번호 | 소재지 및 내역 | 비고 | 감정평가액 | 담당계매각기일
+서브행: (rowspan) | 용도    | (rowspan)     |     | 최저매각가격| 매각금액/유찰
+
+- rowspan 확장 후 서브행도 사건번호를 가지므로 사건번호 유무로 서브행을 판별할 수 없음
+- 서브행 판별: 물건번호 위치에 부동산 용도명(아파트 등)이 있으면 서브행으로 처리
 """
 import re
 from typing import List, Dict, Optional, Tuple
 
 from bs4 import BeautifulSoup
+
+
+# 부동산 용도 유형 (서브행 판별에 사용)
+PROPERTY_TYPES = frozenset({
+    "아파트", "빌라", "연립", "연립주택", "다세대", "다가구", "단독주택",
+    "상가", "근린상가", "근린시설", "사무실", "오피스텔", "공장", "창고",
+    "토지", "임야", "전", "답", "대지", "잡종지", "주택", "점포", "건물",
+})
 
 
 def parse_amount(text: str) -> Optional[int]:
@@ -52,6 +67,60 @@ def _safe_int(val, default: int = 1) -> int:
         return max(1, int(val))
     except (ValueError, TypeError):
         return default
+
+
+def _is_property_type(text: str) -> bool:
+    """텍스트가 부동산 용도 유형인지 판단합니다."""
+    text = text.strip()
+    return any(pt == text or pt in text for pt in PROPERTY_TYPES)
+
+
+def _parse_result_cell(text: str) -> Dict:
+    """
+    담당계/매각결과 컬럼 텍스트에서 결과 정보를 추출합니다.
+
+    형태:
+    - "유찰"                → 매각결과=유찰
+    - "매각696,969,699"    → 매각결과=매각, 매각금액=696969699
+    - "최저366,500,000매각696,969,699" 등 복합 형태도 처리
+    """
+    result: Dict = {}
+    text = text.strip()
+
+    if not text:
+        return result
+
+    # 유찰
+    if "유찰" in text:
+        result["매각결과"] = "유찰"
+        return result
+
+    # 매각 포함
+    if "매각" in text:
+        result["매각결과"] = "매각"
+        # 최저매각가격 추출 시도 (복합 형태)
+        min_match = re.search(r'최저\s*([\d,]+)', text)
+        if min_match:
+            raw_min = min_match.group(1).replace(",", "")
+            if raw_min.isdigit():
+                result["최저매각가격"] = f"{int(raw_min):,}"
+                result["최저매각가격_원"] = int(raw_min)
+        # 매각금액 추출
+        sale_match = re.search(r'매각\s*([\d,]+)', text)
+        if sale_match:
+            raw_sale = sale_match.group(1).replace(",", "")
+            if raw_sale.isdigit():
+                result["매각금액"] = f"{int(raw_sale):,}"
+                result["매각금액_원"] = int(raw_sale)
+        return result
+
+    # 순수 금액만 있는 경우 (숫자+콤마로만 구성)
+    amount = parse_amount(text)
+    if amount and amount >= 1_000_000:
+        result["매각금액"] = f"{amount:,}"
+        result["매각금액_원"] = amount
+
+    return result
 
 
 def _expand_table(table) -> List[List[str]]:
@@ -106,7 +175,13 @@ def parse_result_page(page_source: str, debug: bool = False) -> List[Dict]:
     """
     매각결과 페이지 소스에서 데이터를 파싱합니다.
 
-    rowspan/colspan 구조 및 용도·금액이 서브행으로 분리된 구조 모두 처리합니다.
+    【서브행 처리 전략】
+    rowspan으로 인해 서브행도 사건번호를 가지므로, 사건번호 유무로 판별 불가.
+    대신 물건번호 컬럼 위치에 부동산 용도명(아파트, 빌라 등)이 있으면 서브행으로 처리.
+
+    서브행에서 추출:
+    - 물건번호 위치 → 용도
+    - 마지막 컬럼 위치 → _parse_result_cell()로 매각결과/최저매각가격/매각금액 추출
     """
     soup = BeautifulSoup(page_source, "html.parser")
     results = []
@@ -160,6 +235,23 @@ def parse_result_page(page_source: str, debug: bool = False) -> List[Dict]:
     if debug:
         print(f"[ResultParser] 헤더: {headers}")
 
+    # 물건번호 컬럼 인덱스 탐색
+    gun_col_idx = None
+    last_col_idx = len(headers) - 1
+    for ci, h in enumerate(headers):
+        if "물건번호" in h:
+            gun_col_idx = ci
+            break
+
+    # 결과 컬럼 인덱스: 마지막 컬럼 또는 '매각기일', '결과' 포함 컬럼
+    result_col_idx = last_col_idx
+    for ci, h in enumerate(headers):
+        if any(kw in h for kw in ["매각기일", "결과", "입찰기간", "담당"]):
+            result_col_idx = ci
+
+    if debug:
+        print(f"[ResultParser] 물건번호 컬럼: {gun_col_idx}, 결과 컬럼: {result_col_idx}")
+
     # 중복 방지용 키 집합 (rowspan 확장으로 동일 행이 반복되는 경우)
     seen_keys = set()
 
@@ -168,7 +260,7 @@ def parse_result_page(page_source: str, debug: bool = False) -> List[Dict]:
         for ci, text in enumerate(row):
             if ci < len(headers) and headers[ci]:
                 col = headers[ci]
-                if col not in row_data:  # 중복 헤더는 첫 번째 값 사용
+                if col not in row_data:
                     row_data[col] = text
             elif text:
                 row_data[f"컬럼{ci+1}"] = text
@@ -176,7 +268,6 @@ def parse_result_page(page_source: str, debug: bool = False) -> List[Dict]:
 
     def finalize(row_data: Dict) -> Dict:
         """사건번호 파싱, 금액 변환, 날짜 정규화 등 후처리."""
-        # 사건번호에 법원명이 붙어있는 경우 분리
         case_raw = row_data.get("사건번호", "")
         if case_raw and any(kw in case_raw for kw in ["지방법원", "가정법원", "지원"]):
             court, case_no = _extract_court_and_case(case_raw)
@@ -187,10 +278,10 @@ def parse_result_page(page_source: str, debug: bool = False) -> List[Dict]:
 
         # 금액 컬럼 파싱
         for col in ["감정평가액", "최저매각가격", "매각금액"]:
-            if col in row_data:
+            if col in row_data and row_data[col] and not row_data.get(col + "_원"):
                 row_data[col + "_원"] = parse_amount(row_data[col])
 
-        # 매각일자 정규화
+        # 날짜 정규화
         for col in ["매각일자", "매각기일"]:
             if col in row_data and row_data[col]:
                 row_data[col] = _extract_date(row_data[col]) or row_data[col]
@@ -201,57 +292,110 @@ def parse_result_page(page_source: str, debug: bool = False) -> List[Dict]:
 
         return row_data
 
-    # 서브행 판단: 사건번호·소재지 없이 용도·금액만 있는 행
-    SUBROW_FIELDS = {"용도", "감정평가액", "최저매각가격", "매각금액"}
+    def is_subrow_by_content(row_data: Dict, row: List[str]) -> bool:
+        """
+        행 내용을 보고 서브행 여부를 판단합니다.
+
+        기준:
+        1. 물건번호 위치에 부동산 용도명이 있음 (아파트, 빌라 등)
+        2. 물건번호가 숫자가 아님 (물건번호는 보통 1, 2, 3 등 숫자)
+        """
+        if gun_col_idx is not None and gun_col_idx < len(row):
+            gun_val = row[gun_col_idx].strip()
+            if gun_val and not gun_val.isdigit():
+                # 숫자가 아닌 값이 물건번호 위치에 있으면 서브행 의심
+                if _is_property_type(gun_val):
+                    return True
+        return False
+
+    def merge_subrow(prev: Dict, row: List[str], row_data: Dict):
+        """서브행 데이터를 이전 메인행에 병합합니다."""
+        # 물건번호 위치에서 용도 추출
+        if gun_col_idx is not None and gun_col_idx < len(row):
+            gun_val = row[gun_col_idx].strip()
+            if gun_val and not prev.get("용도"):
+                prev["용도"] = gun_val
+
+        # 결과 컬럼에서 매각결과/최저매각가격/매각금액 추출
+        if result_col_idx < len(row):
+            result_text = row[result_col_idx].strip()
+            if result_text:
+                parsed = _parse_result_cell(result_text)
+                for k, v in parsed.items():
+                    if not prev.get(k):
+                        prev[k] = v
+
+        # 서브행 그리드 다른 컬럼에서도 최저매각가격 찾기
+        # (감정평가액 컬럼이 rowspan이 아니라면 해당 위치에 최저매각가격이 있을 수 있음)
+        for ci, h in enumerate(headers):
+            if "최저" in h and "매각" in h:
+                val = row[ci] if ci < len(row) else ""
+                if val and val != prev.get("감정평가액") and not prev.get("최저매각가격"):
+                    prev["최저매각가격"] = val
+                    amt = parse_amount(val)
+                    if amt:
+                        prev["최저매각가격_원"] = amt
+                break
 
     for ri, row in enumerate(grid):
         if ri == header_row_idx:
             continue
         if not any(row):
             continue
-        # 순수 헤더 반복 행 건너뛰기
         if _is_header_row(row):
             continue
 
         row_data = row_to_dict(row)
 
+        # 서브행 판별
+        if is_subrow_by_content(row_data, row):
+            # 서브행: 이전 메인행에 데이터 병합
+            if results:
+                merge_subrow(results[-1], row, row_data)
+                if debug:
+                    gun_val = row[gun_col_idx] if gun_col_idx and gun_col_idx < len(row) else ""
+                    res_val = row[result_col_idx] if result_col_idx < len(row) else ""
+                    print(f"  [서브행] 용도={gun_val}, 결과={res_val}")
+            continue
+
+        # 메인행 처리
         has_case = bool(row_data.get("사건번호", "").strip())
-        has_loc  = bool(row_data.get("소재지", "").strip())
+        has_loc = bool(
+            row_data.get("소재지", "").strip()
+            or row_data.get("소재지 및 내역", "").strip()
+        )
 
-        if has_case or has_loc:
-            # 정상 메인 행
-            row_data = finalize(row_data)
-            key = (row_data.get("사건번호", ""), row_data.get("물건번호", ""))
-
-            if key in seen_keys:
-                # rowspan 확장으로 인한 중복 → 비어있는 필드만 보완
-                for existing in reversed(results):
-                    ek = (existing.get("사건번호", ""), existing.get("물건번호", ""))
-                    if ek == key:
-                        for k, v in row_data.items():
-                            if v and not existing.get(k):
-                                existing[k] = v
-                        break
-                continue
-
-            seen_keys.add(key)
-            results.append(row_data)
-
-        else:
-            # 서브행: 용도·금액 정보가 있으면 직전 결과에 병합
-            has_subrow_data = any(row_data.get(f) for f in SUBROW_FIELDS)
+        if not (has_case or has_loc):
+            # 사건번호도 소재지도 없는 빈 행 → 서브행 재시도
+            has_subrow_data = any(
+                row_data.get(f) for f in ["용도", "감정평가액", "최저매각가격", "매각금액"]
+            )
             if has_subrow_data and results:
-                prev = results[-1]
-                for k, v in row_data.items():
-                    if v and not prev.get(k):
-                        prev[k] = v
-                # 금액 원 단위 재계산 (새로 병합된 경우)
-                for col in ["감정평가액", "최저매각가격", "매각금액"]:
-                    if col in prev and not prev.get(col + "_원"):
-                        prev[col + "_원"] = parse_amount(prev[col])
+                merge_subrow(results[-1], row, row_data)
+            continue
+
+        # 정상 메인행
+        row_data = finalize(row_data)
+        key = (row_data.get("사건번호", ""), row_data.get("물건번호", ""))
+
+        if key in seen_keys:
+            # rowspan으로 인한 중복 행 → 기존 레코드 보완
+            for existing in reversed(results):
+                ek = (existing.get("사건번호", ""), existing.get("물건번호", ""))
+                if ek == key:
+                    for k, v in row_data.items():
+                        if v and not existing.get(k):
+                            existing[k] = v
+                    break
+            continue
+
+        seen_keys.add(key)
+        results.append(row_data)
 
     if debug:
         print(f"[ResultParser] 파싱 완료: {len(results)}건")
+        for r in results:
+            print(f"  [{r.get('사건번호')}] 용도={r.get('용도')} 최저매각가격={r.get('최저매각가격')} 매각금액={r.get('매각금액')} 결과={r.get('매각결과')}")
 
     return results
 
