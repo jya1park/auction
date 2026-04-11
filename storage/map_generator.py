@@ -490,17 +490,16 @@ def _build_html(items_json: str, total: int, title_suffix: str = "",
           }}
         }};
 
-        /* ── 사건번호 클릭 → 법원경매 검색 ── */
-        window.openCase = function(caseNo) {{
-          var searchUrl = 'https://www.courtauction.go.kr/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ151F00.xml';
-          if (navigator.clipboard && navigator.clipboard.writeText) {{
-            navigator.clipboard.writeText(caseNo)
-              .then(function()  {{ showToast('사건번호 복사됨 — 새 탭 검색창에 붙여넣기 후 검색 (Ctrl+V)'); }})
-              .catch(function() {{ fallbackCopy(caseNo); showToast('사건번호 복사됨 — 새 탭 검색창에 붙여넣기 후 검색 (Ctrl+V)'); }});
-          }} else {{
-            fallbackCopy(caseNo); showToast('사건번호 복사됨 — 새 탭 검색창에 붙여넣기 후 검색 (Ctrl+V)');
-          }}
+        /* ── 사건번호 클릭 → 법원경매 자동검색 (Tampermonkey 연동) ── */
+        window.openCase = function(caseNo, court) {{
+          /* URL hash로 사건번호·법원 전달 → Tampermonkey 스크립트가 자동입력 */
+          var hash = 'caseNo=' + encodeURIComponent(caseNo);
+          if (court) hash += '&court=' + encodeURIComponent(court);
+          var searchUrl = 'https://www.courtauction.go.kr/pgj/index.on'
+                        + '?w2xPath=/pgj/ui/pgj100/PGJ159M00.xml'
+                        + '#' + hash;
           window.open(searchUrl, '_blank');
+          showToast('새 탭에서 자동검색 시도 중…');
         }};
 
         /* ── 라벨 정의 ── */
@@ -535,10 +534,16 @@ def _build_html(items_json: str, total: int, title_suffix: str = "",
               var valClass = MONEY_LABELS.has(label)
                 ? (label === '매각금액' ? ' class="iw-money-sale"' : ' class="iw-money"')
                 : '';
-              /* 사건번호는 클릭 가능하게 (data-case 속성으로 전달 → 이스케이프 불필요) */
+              /* 사건번호: data-case + data-court 으로 값 전달 (이스케이프 불필요) */
               if (key === '사건번호') {{
-                var caseAttr = val.replace(/"/g, '&quot;');
-                val = '<span class="iw-case-link" data-case="' + caseAttr + '" title="클릭하면 법원경매 사이트 검색" onclick="openCase(this.dataset.case)">' + val + '</span>';
+                var caseAttr  = val.replace(/"/g, '&quot;');
+                var courtAttr = (item['법원'] || '').replace(/"/g, '&quot;');
+                val = '<span class="iw-case-link"'
+                    + ' data-case="'  + caseAttr  + '"'
+                    + ' data-court="' + courtAttr + '"'
+                    + ' title="클릭 → 법원경매 자동검색"'
+                    + ' onclick="openCase(this.dataset.case, this.dataset.court)">'
+                    + val + '</span>';
                 valClass = '';
               }}
               rows += '<tr><th>' + label + '</th><td' + valClass + '>' + val + '</td></tr>';
