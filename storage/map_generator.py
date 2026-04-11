@@ -496,7 +496,7 @@ def _build_html(items_json: str, total: int, title_suffix: str = "",
           var hash = 'caseNo=' + encodeURIComponent(caseNo);
           if (court) hash += '&court=' + encodeURIComponent(court);
           var searchUrl = 'https://www.courtauction.go.kr/pgj/index.on'
-                        + '?w2xPath=/pgj/ui/pgj100/PGJ158M00.xml'
+                        + '?w2xPath=/pgj/ui/pgj100/PGJ159M00.xml'
                         + '#' + hash;
           window.open(searchUrl, '_blank');
           showToast('새 탭에서 자동검색 시도 중…');
