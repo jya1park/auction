@@ -75,6 +75,35 @@ def save_csv(data: List[Dict], filename: str = None) -> str:
     return filepath
 
 
+def save_result_csv(result_data: List[Dict]) -> str:
+    """
+    매각결과 데이터를 CSV 파일로 저장합니다.
+    항상 고정 파일명 courtauction_result.csv 에 덮어씁니다.
+    """
+    if not result_data:
+        print("[Exporter] 저장할 매각결과 데이터가 없습니다.")
+        return ""
+
+    out_dir = ensure_output_dir()
+    filepath = os.path.join(out_dir, "courtauction_result.csv")
+
+    fieldnames = []
+    seen = set()
+    for row in result_data:
+        for k in row.keys():
+            if k not in seen:
+                fieldnames.append(k)
+                seen.add(k)
+
+    with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(result_data)
+
+    print(f"[Exporter] 매각결과 CSV 저장 완료: {filepath} ({len(result_data)}건)")
+    return filepath
+
+
 def save_excel(data: List[Dict], filename: str = None) -> str:
     """
     데이터를 Excel 파일로 저장합니다.
