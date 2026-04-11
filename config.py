@@ -11,5 +11,5 @@ PAGE_DELAY = 2.0
 # 출력 디렉토리
 OUTPUT_DIR = "output"
 
-# Kakao REST API 키 (지오코딩용)
+# 카카오 API 키
 KAKAO_REST_API_KEY = "62a90e550520f584844f36e96c9c0d40"
