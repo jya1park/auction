@@ -390,11 +390,18 @@ def _build_html(items_json: str, total: int, title_suffix: str = "",
     /* 금액 강조 */
     .iw-money      {{ font-weight: bold; color: #2e7d32; }}
     .iw-money-sale {{ font-weight: bold; color: #1565C0; }}
+    /* 사건번호 클릭 링크 */
+    .iw-case-link {{
+      color: #1565C0;
+      cursor: pointer;
+      text-decoration: underline dotted;
+    }}
+    .iw-case-link:hover {{ color: #0d47a1; text-decoration: underline; }}
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div id="copy-toast">주소 복사됨 ✓</div>
+  <div id="copy-toast"></div>
   <div id="panel">
     <span style="color:#2e7d32">●</span> 경매목록 {total}건{panel_result}
     &nbsp;|&nbsp; <span style="color:#F57C00">●</span> 혼합
@@ -454,21 +461,13 @@ def _build_html(items_json: str, total: int, title_suffix: str = "",
           if (currentIW) {{ currentIW.close(); currentIW = null; }}
         }};
 
-        /* ── 주소 클립보드 복사 ── */
-        window.copyAddr = function(addr) {{
+        /* ── 토스트 공통 표시 ── */
+        function showToast(msg) {{
           var toast = document.getElementById('copy-toast');
-          function showToast() {{
-            toast.style.display = 'block';
-            setTimeout(function() {{ toast.style.display = 'none'; }}, 1800);
-          }}
-          if (navigator.clipboard && navigator.clipboard.writeText) {{
-            navigator.clipboard.writeText(addr).then(showToast).catch(function() {{
-              fallbackCopy(addr); showToast();
-            }});
-          }} else {{
-            fallbackCopy(addr); showToast();
-          }}
-        }};
+          toast.textContent = msg;
+          toast.style.display = 'block';
+          setTimeout(function() {{ toast.style.display = 'none'; }}, 2200);
+        }}
         function fallbackCopy(text) {{
           var el = document.createElement('textarea');
           el.value = text;
@@ -479,6 +478,30 @@ def _build_html(items_json: str, total: int, title_suffix: str = "",
           try {{ document.execCommand('copy'); }} catch(e) {{}}
           document.body.removeChild(el);
         }}
+
+        /* ── 주소 클립보드 복사 ── */
+        window.copyAddr = function(addr) {{
+          if (navigator.clipboard && navigator.clipboard.writeText) {{
+            navigator.clipboard.writeText(addr)
+              .then(function()  {{ showToast('주소 복사됨 ✓'); }})
+              .catch(function() {{ fallbackCopy(addr); showToast('주소 복사됨 ✓'); }});
+          }} else {{
+            fallbackCopy(addr); showToast('주소 복사됨 ✓');
+          }}
+        }};
+
+        /* ── 사건번호 클릭 → 법원경매 검색 ── */
+        window.openCase = function(caseNo) {{
+          var searchUrl = 'https://www.courtauction.go.kr/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ151F00.xml';
+          if (navigator.clipboard && navigator.clipboard.writeText) {{
+            navigator.clipboard.writeText(caseNo)
+              .then(function()  {{ showToast('사건번호 복사됨 — 새 탭 검색창에 붙여넣기 후 검색 (Ctrl+V)'); }})
+              .catch(function() {{ fallbackCopy(caseNo); showToast('사건번호 복사됨 — 새 탭 검색창에 붙여넣기 후 검색 (Ctrl+V)'); }});
+          }} else {{
+            fallbackCopy(caseNo); showToast('사건번호 복사됨 — 새 탭 검색창에 붙여넣기 후 검색 (Ctrl+V)');
+          }}
+          window.open(searchUrl, '_blank');
+        }};
 
         /* ── 라벨 정의 ── */
         var LABELS_RESULT = {{
@@ -508,10 +531,17 @@ def _build_html(items_json: str, total: int, title_suffix: str = "",
             var label = LABELS[key];
             if (item[key] && !seen[label]) {{
               seen[label] = true;
+              var val = item[key];
               var valClass = MONEY_LABELS.has(label)
                 ? (label === '매각금액' ? ' class="iw-money-sale"' : ' class="iw-money"')
                 : '';
-              rows += '<tr><th>' + label + '</th><td' + valClass + '>' + item[key] + '</td></tr>';
+              /* 사건번호는 클릭 가능하게 */
+              if (key === '사건번호') {{
+                var safeCaseNo = val.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                val = '<span class="iw-case-link" title="클릭하면 법원경매 사이트 검색" onclick="openCase(\'' + safeCaseNo + '\')">' + val + '</span>';
+                valClass = '';
+              }}
+              rows += '<tr><th>' + label + '</th><td' + valClass + '>' + val + '</td></tr>';
             }}
           }});
           /* 배지 결정 */
