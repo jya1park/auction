@@ -250,25 +250,81 @@ class ResultNavigator:
                 continue
         return False
 
-    def go_to_next_page(self) -> bool:
-        """다음 페이지 이동."""
-        for sel in [
+    def _click_next_block(self) -> bool:
+        """'다음' 블록 이동 버튼 클릭 (navigator.py와 동일한 패턴)."""
+        next_selectors = [
+            "//a[normalize-space(text())='다음']",
+            "//button[normalize-space(text())='다음']",
             "//a[contains(text(),'다음')]",
             "//button[contains(text(),'다음')]",
             "//img[@alt='다음']/..",
-            "//*[contains(@class,'next')]",
-        ]:
+            "//a[@title='다음 페이지']",
+            "//a[contains(@onclick,'next') or contains(@onclick,'Next')]",
+            "//*[contains(@class,'next') or contains(@id,'next')]",
+        ]
+        for sel in next_selectors:
             try:
                 btn = self.driver.find_element(By.XPATH, sel)
                 if btn.is_displayed() and btn.is_enabled():
                     cls = btn.get_attribute("class") or ""
-                    if "disabled" in cls or "dim" in cls:
+                    aria_disabled = btn.get_attribute("aria-disabled") or ""
+                    if "disabled" in cls or "dim" in cls or aria_disabled.lower() == "true":
+                        self.log("다음 버튼 비활성화 (마지막 블록)")
                         return False
                     btn.click()
+                    self.log(f"다음 블록 버튼 클릭: {sel}")
                     time.sleep(config.PAGE_DELAY)
                     return True
             except (NoSuchElementException, StaleElementReferenceException):
                 continue
+            except Exception as e:
+                self.log(f"  다음 블록 버튼 오류: {e}")
+        self.log("다음 페이지 버튼 없음 (마지막 페이지)")
+        return False
+
+    def go_to_next_page(self, current_page: int = 0) -> bool:
+        """다음 페이지 이동 (staleness_of + 페이지번호 클릭 방식)."""
+        next_page = current_page + 1
+
+        def _try_click_page(page_num):
+            xpaths = [
+                f"//a[normalize-space(text())='{page_num}']",
+                f"//button[normalize-space(text())='{page_num}']",
+                f"//span[normalize-space(text())='{page_num}']",
+                f"//td[normalize-space(text())='{page_num}']",
+            ]
+            for xpath in xpaths:
+                try:
+                    els = self.driver.find_elements(By.XPATH, xpath)
+                    for el in els:
+                        if el.is_displayed() and el.text.strip() == str(page_num):
+                            try:
+                                old_el = self.driver.find_element(By.XPATH, "//tbody/tr[1]")
+                            except Exception:
+                                old_el = None
+                            el.click()
+                            if old_el:
+                                try:
+                                    WebDriverWait(self.driver, 10).until(EC.staleness_of(old_el))
+                                except Exception:
+                                    pass
+                            time.sleep(config.PAGE_DELAY + 1)
+                            self.log(f"페이지 {page_num} 클릭 성공")
+                            return True
+                except Exception:
+                    continue
+            return False
+
+        if _try_click_page(next_page):
+            return True
+
+        if not self._click_next_block():
+            return False
+
+        time.sleep(2)
+        if _try_click_page(next_page):
+            return True
+
         return False
 
     def run_search(self) -> bool:

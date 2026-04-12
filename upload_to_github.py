@@ -46,16 +46,21 @@ def upload_file(local_path, github_path, commit_msg="Add docs"):
     except urllib.error.HTTPError as e:
         print("Error {}: {} {}".format(github_path, e.code, e.read().decode()))
 
-# PLAN.md
-upload_file(r"C:\Users\jya1p\Documents\PLAN.md", "PLAN.md", "Add PLAN.md")
+BASE = r"C:\Users\jya1p\Documents\courtauction_crawler"
 
-# CLAUDE.md
-upload_file(r"C:\Users\jya1p\Documents\courtauction_crawler\CLAUDE.md", "CLAUDE.md", "Add CLAUDE.md")
+# 소스 파일 전체 업로드
+source_files = [
+    (r"config.py", "config.py"),
+    (r"main.py", "main.py"),
+    (r"crawler\result_navigator.py", "crawler/result_navigator.py"),
+    (r"crawler\result_parser.py", "crawler/result_parser.py"),
+    (r"storage\exporter.py", "storage/exporter.py"),
+    (r"storage\map_generator.py", "storage/map_generator.py"),
+    (r"CLAUDE.md", "CLAUDE.md"),
+]
 
-# docs/ files
-docs_base = r"C:\Users\jya1p\Documents\courtauction_crawler\docs"
-for fname in ["projectplanner.md", "codedeveloper.md", "codereviewer.md", "tester.md"]:
-    fpath = os.path.join(docs_base, fname)
-    upload_file(fpath, "docs/{}".format(fname), "Add docs/{}".format(fname))
+for local_rel, github_path in source_files:
+    local_path = os.path.join(BASE, local_rel)
+    upload_file(local_path, github_path, f"Update {github_path}")
 
 print("Done.")

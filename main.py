@@ -8,6 +8,7 @@
     python main.py --watchlist  # 찜한 물건 낙찰 조회
     python main.py --excel      # Excel도 저장
     python main.py --debug      # 디버그 모드 (DOM 구조 출력)
+    python main.py --map        # 크롤링 없이 지도 HTML만 재생성
     python main.py --visible --debug --pages 3 --excel
 """
 import sys
@@ -15,13 +16,25 @@ import time
 import argparse
 
 import config
-from crawler.driver import create_driver, quit_driver
-from crawler.navigator import Navigator
-from crawler.list_parser import parse_list_page, get_total_count
-from crawler.detail_parser import DetailParser
-from crawler.result_navigator import ResultNavigator
-from crawler.result_parser import parse_result_page, get_total_count as get_result_count
-from storage.exporter import save_csv, save_excel, update_excel, print_summary
+# ── 크롤러 관련 임포트는 lazy로 처리 ──────────────────────────
+# --map 모드에서는 selenium/webdriver_manager가 필요 없으므로
+# 해당 모드 진입 시 한국어 Windows CP949 UnicodeDecodeError를 방지합니다.
+def _import_crawler():
+    global create_driver, quit_driver, Navigator
+    global parse_list_page, get_total_count
+    global DetailParser
+    global ResultNavigator
+    global parse_result_page, get_result_count
+    global save_csv, save_excel, update_excel, print_summary, save_result_csv
+
+    from crawler.driver import create_driver, quit_driver
+    from crawler.navigator import Navigator
+    from crawler.list_parser import parse_list_page, get_total_count
+    from crawler.detail_parser import DetailParser
+    from crawler.result_navigator import ResultNavigator
+    from crawler.result_parser import parse_result_page
+    from crawler.result_parser import get_total_count as get_result_count
+    from storage.exporter import save_csv, save_excel, update_excel, print_summary, save_result_csv
 
 
 def parse_args():
@@ -62,6 +75,10 @@ def parse_args():
         "--type", type=str, default=config.TARGET_TYPE,
         dest="prop_type",
         help=f"물건종류 (기본: {config.TARGET_TYPE})"
+    )
+    parser.add_argument(
+        "--map", action="store_true",
+        help="크롤링 없이 기존 데이터로 지도 HTML만 재생성합니다"
     )
     return parser.parse_args()
 
@@ -278,7 +295,7 @@ def run_result_mode(driver, args) -> list:
             print(f"[Main] 최대 페이지({max_pages}) 도달")
             break
 
-        has_next = result_nav.go_to_next_page()
+        has_next = result_nav.go_to_next_page(current_page=page)
         if not has_next:
             print("[Main] 매각결과 마지막 페이지")
             break
@@ -364,8 +381,31 @@ def run_crawl_mode(driver, navigator, args):
     return all_data
 
 
+def run_map_only():
+    """크롤링 없이 기존 xlsx 데이터로 지도 HTML만 재생성."""
+    print("="*60)
+    print("지도 HTML 재생성 모드")
+    print("="*60)
+    try:
+        from storage.map_generator import generate_map
+        generate_map()
+        print("[Main] 지도 HTML 생성 완료")
+    except Exception as e:
+        print(f"[Main] 지도 생성 오류: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def main():
     args = parse_args()
+
+    # --map: 크롤링 없이 지도만 재생성 (selenium 임포트 불필요)
+    if args.map:
+        run_map_only()
+        return
+
+    # 크롤러 관련 모듈은 여기서 lazy import (한국어 Windows CP949 호환)
+    _import_crawler()
 
     print("="*60)
     print("대법원 경매 크롤러")
@@ -409,6 +449,8 @@ def main():
             if data:
                 print_summary(data)
                 csv_path = save_csv(data)
+            if result_data:
+                save_result_csv(result_data)  # 매각결과 CSV (지도 파란 마커용)
             xlsx_path = update_excel(data, result_data)  # 두 시트 누적 업데이트
 
             # 지도 HTML 생성

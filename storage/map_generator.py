@@ -545,14 +545,47 @@ def _build_html(items_json: str, total: int,
       '진행상태': '상태', '상태': '상태',
       '유찰횟수': '유찰횟수',
     }};
+    function copyAddr(btn, text) {{
+      text = text.split('(')[0].trim();
+      function showFeedback(ok) {{
+        btn.textContent = ok ? '✅' : '❌';
+        setTimeout(function() {{ btn.textContent = '📋'; }}, 1500);
+      }}
+      function execCopy() {{
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;';
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        var ok = false;
+        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
+        document.body.removeChild(ta);
+        showFeedback(ok);
+      }}
+      if (navigator.clipboard && navigator.clipboard.writeText) {{
+        navigator.clipboard.writeText(text).then(function() {{
+          showFeedback(true);
+        }}).catch(function() {{
+          execCopy();
+        }});
+      }} else {{
+        execCopy();
+      }}
+    }}
+
     function buildPopupContent(item) {{
       var seen = {{}};
+      var addrKeys = ['물건주소','소재지','주소','물건소재지','소재지 및 내역'];
       var rows = '';
       Object.keys(POPUP_LABELS).forEach(function(key) {{
         var label = POPUP_LABELS[key];
         if (item[key] && !seen[label]) {{
           seen[label] = true;
-          rows += '<tr><th>' + label + '</th><td>' + item[key] + '</td></tr>';
+          var isAddr = addrKeys.indexOf(key) !== -1;
+          var cellContent = isAddr
+            ? item[key] + ' <button data-addr="' + item[key].replace(/"/g,'&quot;') + '" onclick="copyAddr(this,this.dataset.addr)" style="border:none;background:none;cursor:pointer;font-size:14px;vertical-align:middle;">📋</button>'
+            : item[key];
+          rows += '<tr><th>' + label + '</th><td>' + cellContent + '</td></tr>';
         }}
       }});
       var caseNum = item['사건번호'] || '';
@@ -589,14 +622,17 @@ def _build_html(items_json: str, total: int,
           seen[label] = true;
           var val = item[key];
           if (key === '매각결과') {{
-            var color = (val === '낙찰') ? '#1565C0' : '#E65100';
+            var color = (item['매각금액'] && String(item['매각금액']).trim()) ? '#1565C0' : '#E65100';
             val = '<b style="color:' + color + '">' + val + '</b>';
+          }} else if (key === '소재지 및 내역') {{
+            val = val + ' <button data-addr="' + val.replace(/"/g,'&quot;') + '" onclick="copyAddr(this,this.dataset.addr)" style="border:none;background:none;cursor:pointer;font-size:14px;vertical-align:middle;">📋</button>';
           }}
           rows += '<tr><th>' + label + '</th><td>' + val + '</td></tr>';
         }}
       }});
-      var headerColor = item['매각결과'] === '낙찰' ? '#1565C0' : '#E65100';
-      var headerText  = item['매각결과'] === '낙찰' ? '🏆 낙찰 결과' : '❌ 유찰';
+      var _isNakchal  = (item['매각금액'] && String(item['매각금액']).trim());
+      var headerColor = _isNakchal ? '#1565C0' : '#E65100';
+      var headerText  = _isNakchal ? '🏆 낙찰 결과' : '❌ 유찰';
       var caseNum = item['사건번호'] || '';
       var court   = item['법원'] || '';
       var btn = caseNum
@@ -675,7 +711,7 @@ def _build_html(items_json: str, total: int,
       // ── 매각결과 마커 생성 (파란색 별 핀) ──────
       RESULT_ITEMS.forEach(function(item) {{
         if (item.lat == null || item.lng == null) return;
-        var resultType = item['매각결과'] || '매각결과';
+        var resultType = (item['매각금액'] && String(item['매각금액']).trim()) ? '낙찰' : '유찰';
         var pos = new kakao.maps.LatLng(item.lat, item.lng);
         var marker = new kakao.maps.Marker({{
           position: pos,
