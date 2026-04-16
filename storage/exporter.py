@@ -30,11 +30,12 @@ def get_datetime_str() -> str:
 
 def save_csv(data: List[Dict], filename: str = None) -> str:
     """
-    데이터를 CSV 파일로 저장합니다.
+    경매목록 데이터를 courtauction_list.csv 에 저장합니다.
+    항상 고정 파일명으로 덮어씁니다.
 
     Args:
         data: 저장할 딕셔너리 목록
-        filename: 파일명 (없으면 타임스탬프 자동 생성)
+        filename: 파일명 (기본: courtauction_list.csv)
     Returns:
         저장된 파일 경로
     """
@@ -44,7 +45,7 @@ def save_csv(data: List[Dict], filename: str = None) -> str:
 
     out_dir = ensure_output_dir()
     if not filename:
-        filename = f"courtauction_{get_timestamp()}.csv"
+        filename = "courtauction_list.csv"
 
     filepath = os.path.join(out_dir, filename)
 
@@ -63,29 +64,21 @@ def save_csv(data: List[Dict], filename: str = None) -> str:
         writer.writerows(data)
 
     print(f"[Exporter] CSV 저장 완료: {filepath} ({len(data)}건)")
-
-    # 지도 생성용 고정명 CSV도 함께 갱신 (generate_map이 읽는 파일)
-    list_path = os.path.join(out_dir, "courtauction_list.csv")
-    with open(list_path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(data)
-    print(f"[Exporter] 지도용 CSV 갱신: {list_path}")
-
     return filepath
 
 
 def save_result_csv(result_data: List[Dict]) -> str:
     """
-    매각결과 데이터를 CSV 파일로 저장합니다.
-    항상 고정 파일명 courtauction_result.csv 에 덮어씁니다.
+    매각결과 데이터를 날짜별 CSV 파일로 저장합니다.
+    파일명: courtauction_result_YYYYMMDD.csv (매일 새 파일 생성)
     """
     if not result_data:
         print("[Exporter] 저장할 매각결과 데이터가 없습니다.")
         return ""
 
     out_dir = ensure_output_dir()
-    filepath = os.path.join(out_dir, "courtauction_result.csv")
+    date_str = datetime.now().strftime("%Y%m%d")
+    filepath = os.path.join(out_dir, f"courtauction_result_{date_str}.csv")
 
     fieldnames = []
     seen = set()
@@ -341,12 +334,11 @@ def _build_sheet(ws, data: List[Dict], sheet_title: str,
 
 def update_excel(data: List[Dict], result_data: List[Dict] = None) -> str:
     """
-    고정 Excel 파일(courtauction_data.xlsx)에 데이터를 누적 업데이트합니다.
+    고정 Excel 파일(courtauction_data.xlsx)에 데이터를 업데이트합니다.
 
-    - 시트1 '경매목록': 경매 물건 목록 (사건번호+물건번호 기준 upsert)
-    - 시트2 '매각결과': 매각결과 조회 데이터 (사건번호+물건번호 기준 upsert)
+    - 시트1 '경매목록': 기존 데이터 전체 삭제 후 새 데이터로 교체
+    - 시트2 '매각결과': 기존 기록 유지, 신규 항목만 추가 (사건번호+물건번호 기준)
     - 모든 행에 '업데이트일시' 열 기록
-    - 파일이 없으면 새로 생성, 있으면 기존 데이터와 병합
     """
     try:
         import openpyxl
@@ -374,57 +366,55 @@ def update_excel(data: List[Dict], result_data: List[Dict] = None) -> str:
                 rows.append(dict(zip(headers, row)))
         return rows
 
-    def upsert(existing: List[Dict], new: List[Dict]) -> tuple:
-        """사건번호+물건번호 기준 upsert, (merged, new_cnt, upd_cnt) 반환."""
+    def append_new_only(existing: List[Dict], new: List[Dict]) -> tuple:
+        """사건번호+물건번호 기준으로 기존에 없는 신규 항목만 추가합니다."""
         key_fn = lambda r: (str(r.get("사건번호", "")), str(r.get("물건번호", "")))
-        m = {key_fn(r): r for r in existing}
-        nc, uc = 0, 0
+        existing_keys = {key_fn(r) for r in existing}
+        merged = list(existing)
+        nc = 0
         for row in new:
-            k = key_fn(row)
-            if k in m:
-                m[k] = row; uc += 1
-            else:
-                m[k] = row; nc += 1
-        return list(m.values()), nc, uc
+            if key_fn(row) not in existing_keys:
+                merged.append(row)
+                nc += 1
+        return merged, nc
 
-    # 기존 파일 로드
-    existing_list, existing_result = [], []
+    # 기존 매각결과 로드 (경매목록은 전체 교체하므로 로드 불필요)
+    existing_result = []
     if os.path.exists(filepath):
         try:
             wb_old = openpyxl.load_workbook(filepath)
-            existing_list = load_sheet_data(wb_old, "경매목록")
             existing_result = load_sheet_data(wb_old, "매각결과")
-            print(f"[Exporter] 기존 로드 - 경매목록:{len(existing_list)}건, 매각결과:{len(existing_result)}건")
+            print(f"[Exporter] 기존 로드 - 매각결과:{len(existing_result)}건")
         except Exception as e:
             print(f"[Exporter] 기존 파일 로드 실패 (새로 생성): {e}")
 
-    # 경매목록 upsert
-    merged_list = existing_list
+    # 시트1 경매목록: 전체 삭제 후 새 데이터로 교체
+    final_list = []
     if data:
         for row in data:
             row["업데이트일시"] = now_str
-        merged_list, nc, uc = upsert(existing_list, data)
-        print(f"[Exporter] 경매목록: 신규 {nc}건 추가, {uc}건 업데이트 → 총 {len(merged_list)}건")
+        final_list = data
+        print(f"[Exporter] 경매목록: 전체 교체 → {len(final_list)}건")
 
-    # 매각결과 upsert
-    merged_result = existing_result
+    # 시트2 매각결과: 기존 유지 + 신규만 추가
+    final_result = existing_result
     if result_data:
         for row in result_data:
             row["업데이트일시"] = now_str
-        merged_result, nc, uc = upsert(existing_result, result_data)
-        print(f"[Exporter] 매각결과: 신규 {nc}건 추가, {uc}건 업데이트 → 총 {len(merged_result)}건")
+        final_result, nc = append_new_only(existing_result, result_data)
+        print(f"[Exporter] 매각결과: 기존 {len(existing_result)}건 유지, 신규 {nc}건 추가 → 총 {len(final_result)}건")
 
     # Excel 생성
     wb = openpyxl.Workbook()
 
     # 시트1: 경매목록 (최신 업데이트 순 정렬)
     ws1 = wb.active
-    sorted_list = sorted(merged_list, key=lambda r: str(r.get("업데이트일시", "")), reverse=True)
+    sorted_list = sorted(final_list, key=lambda r: str(r.get("업데이트일시", "")), reverse=True)
     _build_sheet(ws1, sorted_list, "경매목록", header_color="1F4E79", date_col_color="2E7D32")
 
     # 시트2: 매각결과 (최신 업데이트 순 정렬)
     ws2 = wb.create_sheet("매각결과")
-    sorted_result = sorted(merged_result, key=lambda r: str(r.get("업데이트일시", "")), reverse=True)
+    sorted_result = sorted(final_result, key=lambda r: str(r.get("업데이트일시", "")), reverse=True)
     _build_sheet(ws2, sorted_result, "매각결과", header_color="4A148C", date_col_color="1565C0")
 
     wb.save(filepath)
